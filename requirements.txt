@@ -1,0 +1,4 @@
+Django>=5.0,<6.0
+pandas
+django-import-export>=4.0
+openpyxl
