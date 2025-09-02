@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from datetime import date
+from app_receita.services.dados import Config, calcular_cascata, listar_carteiras
 
 # Página inicial (resumo)
 def resumo(request):
@@ -51,12 +52,15 @@ STATUS_OPCOES = [
 ]
 
 # OBS: por enquanto, carteiras de exemplo; vamos trocar para vir dos dados (distinct)
-CARTEIRAS_EXEMPLO = [
+CARTEIRAS_FIXAS = [
     {"value": "todas", "label": "Selecionar Todos"},
-    {"value": "Falconi EUA", "label": "Falconi EUA"},
-    {"value": "Infraestrutura e Indústria de Base", "label": "Infraestrutura e Indústria de Base"},
+    {"value": "Agronegócio", "label": "Agronegócio"},
+    {"value": "América do Norte", "label": "América do Norte"},
     {"value": "Bens Não Duráveis", "label": "Bens Não Duráveis"},
+    {"value": "Infraestrutura e Indústria de Base", "label": "Infraestrutura e Indústria de Base"},
+    {"value": "MID", "label": "MID"},
     {"value": "Saúde Educação Segurança e Adm.Pública", "label": "Saúde Educação Segurança e Adm.Pública"},
+    {"value": "Servicos e Tecnologia", "label": "Servicos e Tecnologia"},
 ]
 
 def _get_filtros(request):
@@ -75,7 +79,7 @@ def _get_filtros(request):
         mes = "tudo"
     if status not in [s["value"] for s in STATUS_OPCOES]:
         status = "todos"
-    if carteira not in [c["value"] for c in CARTEIRAS_EXEMPLO]:
+    if carteira not in [c["value"] for c in CARTEIRAS_FIXAS]:
         carteira = "todas"
 
     return {
@@ -91,7 +95,7 @@ def _contexto_comum(request, titulo_pagina):
         "filtros": filtros,
         "MESES_2025": MESES_2025,
         "STATUS_OPCOES": STATUS_OPCOES,
-        "CARTEIRAS": CARTEIRAS_EXEMPLO,
+        "CARTEIRAS": CARTEIRAS_FIXAS,
     }
 
 # ---------- Views ----------
@@ -102,17 +106,36 @@ def resumo(request):
 
 def receita(request):
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
-    # placeholder de dados agregados (vamos carregar do pipeline na próxima etapa)
-    ctx["waterfall_data"] = [
-        {"label": "Receita PoC", "valor": 0},
-        {"label": "Receita Success Fee", "valor": 0},
-        {"label": "Receita Produtos", "valor": 0},
-        {"label": "Pendente Formação de Equipe", "valor": 0},
-        {"label": "Pendente Assinatura", "valor": 0},
-        {"label": "Receita Potencial", "valor": 0},
-        {"label": "GAP Meta", "valor": 0},
-        {"label": "Total", "valor": 0},
-    ]
+
+    # Monte a Config com seus caminhos reais (ajuste depois; por ora podemos testar com o que já tiver local)
+    cfg = Config(
+        # Preencha aqui os caminhos reais se quiser evitar o default do módulo:
+        access_db_razao=r"C:\Work\Base\Base_Razao.accdb",
+        access_db_caixa=r"C:\Work\Base\Base_Caixa.accdb",
+        access_db_resultado=r"C:\Work\Base\BD_Resultado.accdb",
+        access_db_roda_razao=r"C:\Work\Base\Roda_Base_Razao.accdb",
+        # csv_meta_receita=... etc
+        # bigquery_project_id="SEU-PROJETO-GCP",
+    )
+
+    filtros = ctx["filtros"]
+    try:
+        ctx["waterfall_data"] = calcular_cascata(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
+    except Exception as e:
+        # Se der qualquer problema de conector, mantém placeholder e mostra um aviso básico no console
+        print("[receita] Erro ao calcular cascata:", e)
+        import traceback; traceback.print_exc()
+        ctx["waterfall_data"] = [
+            {"label": "Receita PoC", "valor": 0},
+            {"label": "Receita Success Fee", "valor": 0},
+            {"label": "Receita Produtos", "valor": 0},
+            {"label": "Pendente Formação de Equipe", "valor": 0},
+            {"label": "Pendente Assinatura", "valor": 0},
+            {"label": "Receita Potencial", "valor": 0},
+            {"label": "GAP Meta", "valor": 0},
+            {"label": "Total", "valor": 0},
+        ]
+
     return render(request, "receita/receita.html", ctx)
 
 def poc(request):
