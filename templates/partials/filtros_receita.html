@@ -1,0 +1,33 @@
+<form class="row g-3 align-items-end mb-3" method="get">
+  <div class="col-sm-4 col-md-3">
+    <label class="form-label">Mês</label>
+    <select class="form-select" name="mes">
+      <option value="tudo" {% if filtros.mes == "tudo" %}selected{% endif %}>Selecionar Todos</option>
+      {% for m in MESES_2025 %}
+        <option value="{{ m.value }}" {% if filtros.mes == m.value %}selected{% endif %}>{{ m.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-sm-4 col-md-3">
+    <label class="form-label">Status</label>
+    <select class="form-select" name="status">
+      {% for s in STATUS_OPCOES %}
+        <option value="{{ s.value }}" {% if filtros.status == s.value %}selected{% endif %}>{{ s.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-sm-4 col-md-4">
+    <label class="form-label">Carteira</label>
+    <select class="form-select" name="carteira">
+      {% for c in CARTEIRAS %}
+        <option value="{{ c.value }}" {% if filtros.carteira == c.value %}selected{% endif %}>{{ c.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-sm-12 col-md-2 d-grid">
+    <button class="btn btn-primary" type="submit">Aplicar</button>
+  </div>
+</form>
