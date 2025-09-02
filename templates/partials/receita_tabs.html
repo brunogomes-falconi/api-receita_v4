@@ -1,0 +1,23 @@
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/receita/' %}active{% endif %}" href="{% url 'app_receita:receita' %}">Receita (Cascata)</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/poc/' %}active{% endif %}" href="{% url 'app_receita:poc' %}">PoC</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/success-fee/' %}active{% endif %}" href="{% url 'app_receita:success_fee' %}">Success Fee</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/produtos/' %}active{% endif %}" href="{% url 'app_receita:produtos' %}">Produtos</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/pendente-formacao/' %}active{% endif %}" href="{% url 'app_receita:pendente_formacao' %}">Pend. Formação</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/pendente-assinatura/' %}active{% endif %}" href="{% url 'app_receita:pendente_assinatura' %}">Pend. Assinatura</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if request.path == '/receita-potencial/' %}active{% endif %}" href="{% url 'app_receita:receita_potencial' %}">Receita Potencial</a>
+  </li>
+</ul>
