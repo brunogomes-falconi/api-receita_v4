@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% load df_tags %}
+{% block title %}Detalhes de Estoque · Falconi{% endblock %}
+
+{% block content %}
+  {% include "partials/estoque_tabs.html" %}
+  {% include "partials/filtros_estoque.html" with show_tipo=True %}
+
+  <div class="d-flex justify-content-end mb-2">
+    <a class="btn btn-primary"
+       href="{% url 'app_receita:exportar_excel' 'estoque' %}?ano={{ filtros_e.ano }}&tipo={{ filtros_e.tipo }}&status={{ filtros_e.status }}&carteira={{ filtros_e.carteira }}">
+      Exportar Excel
+    </a>
+  </div>
+
+  <div class="card p-3">
+    {% if table is not None and table.shape.0 > 0 %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+          <thead>
+            <tr>
+              {% for col in table.columns %}
+                <th>{{ col }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for _, row in table.iterrows %}
+              <tr>
+                {% for col in table.columns %}
+                  <td>{{ row|get_item:col }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted mb-0">Nenhum dado disponível para os filtros selecionados.</p>
+    {% endif %}
+  </div>
+{% endblock %}

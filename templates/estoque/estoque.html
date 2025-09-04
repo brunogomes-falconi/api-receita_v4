@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Estoque (Cascata) · Falconi{% endblock %}
+
+{% block content %}
+  {% include "partials/estoque_tabs.html" %}
+  {% include "partials/filtros_estoque.html" with show_tipo=False %}
+
+  <div class="card p-4">
+    <h2 class="h5 mb-3">Gráfico de Estoque — {{ filtros_e.ano }}</h2>
+    <div id="waterfall" class="mb-3"></div>
+    <p class="text-muted mb-0">
+      Placeholder do gráfico (Receita PoC, Success Fee, Produtos, Pend. Formação, Pend. Assinatura, Receita Potencial, Total).
+    </p>
+  </div>
+
+  {{ waterfall_data|json_script:"waterfall-data" }}
+  {{ filtros_e|json_script:"estoque-filtros" }}
+
+  <script>
+    // Lê o JSON seguro
+    const wf = JSON.parse(document.getElementById("waterfall-data").textContent);
+    (function () {
+      const container = document.getElementById('waterfall');
+      const data = wf || [];
+      if (!container) return;
+
+      container.style.display = 'grid';
+      container.style.gridTemplateColumns = 'repeat(' + data.length + ', minmax(80px, 1fr))';
+      container.style.gap = '12px';
+      container.style.alignItems = 'end';
+
+      const maxAbs = Math.max(1, ...data.map(d => Math.abs(d.valor || 0)));
+      data.forEach(d => {
+        const col = document.createElement('div');
+        col.style.display = 'flex';
+        col.style.flexDirection = 'column';
+        col.style.alignItems = 'center';
+
+        const bar = document.createElement('div');
+        const h = Math.max(6, Math.round((Math.abs(d.valor || 0) / maxAbs) * 180));
+        bar.style.height = h + 'px';
+        bar.style.width = '100%';
+        bar.style.borderRadius = '8px';
+        bar.style.background = (d.label === 'Total')
+          ? 'var(--falconi-accent)'
+          : 'var(--falconi-primary)';
+
+        const lbl = document.createElement('div');
+        lbl.style.marginTop = '6px';
+        lbl.style.fontSize = '0.85rem';
+        lbl.style.textAlign = 'center';
+        lbl.textContent = d.label;
+
+        col.appendChild(bar);
+        col.appendChild(lbl);
+        container.appendChild(col);
+      });
+    })();
+  </script>
+{% endblock %}

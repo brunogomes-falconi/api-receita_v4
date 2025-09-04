@@ -21,3 +21,13 @@
     <a class="nav-link {% if request.path == '/receita-potencial/' %}active{% endif %}" href="{% url 'app_receita:receita_potencial' %}">Receita Potencial</a>
   </li>
 </ul>
+<nav class="nav nav-tabs mb-3">
+  <a class="nav-link {% if request.resolver_match.url_name == 'estoque' %}active{% endif %}"
+     href="{% url 'app_receita:estoque' %}?ano={{ filtros_estoque.ano }}&status={{ filtros_estoque.status }}&carteira={{ filtros_estoque.carteira }}">
+    Estoque (Cascata)
+  </a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'estoque_detalhes' %}active{% endif %}"
+     href="{% url 'app_receita:estoque_detalhes' %}?ano={{ filtros_estoque.ano }}&status={{ filtros_estoque.status }}&carteira={{ filtros_estoque.carteira }}&tipo={{ filtros_estoque.tipo|default:'Receita' }}">
+    Detalhes Estoque
+  </a>
+</nav>

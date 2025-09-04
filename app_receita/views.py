@@ -13,6 +13,8 @@ from app_receita.services.dados import (
     tabela_pendente_formacao,
     tabela_pendente_assinatura,
     tabela_receita_potencial,
+    calcular_cascata_estoque,
+    tabela_estoque,
 )
 
 # ---------- Helpers de filtros ----------
@@ -37,14 +39,17 @@ STATUS_OPCOES = [
     {"value": "Renovação", "label": "Renovação"},
 ]
 
+ANOS = [{"value": str(a), "label": str(a)} for a in [2025, 2026, 2027, 2028, 2029]]
+
+TIPOS_ESTOQUE = [
+    {"value": "Pendente Formação", "label": "Pendente Formação de Equipe"},
+    {"value": "Receita", "label": "Receita (PoC)"},
+    {"value": "Receita Produto", "label": "Receita Produto"},
+    {"value": "Success Fee", "label": "Success Fee"},
+]
+
 
 def _get_filtros(request):
-    """
-    Extrai filtros da querystring:
-      - mes (string: '2025-01' ... '2025-12' ou 'tudo')
-      - status (string: 'Novo' | 'Renovação' | 'todos')
-      - carteira (string: 'todas' | <nome>)
-    """
     mes = request.GET.get("mes", "tudo")
     status = request.GET.get("status", "todos")
     carteira = request.GET.get("carteira", "todas")
@@ -57,6 +62,24 @@ def _get_filtros(request):
         carteira = "todas"
 
     return {"mes": mes, "status": status, "carteira": carteira}
+
+
+def _get_filtros_estoque(request):
+    ano = request.GET.get("ano", "2025")
+    tipo = request.GET.get("tipo", "Receita")  # só usado na tela de detalhes
+    status = request.GET.get("status", "todos")
+    carteira = request.GET.get("carteira", "todas")
+
+    if ano not in [x["value"] for x in ANOS]:
+        ano = "2025"
+    if status not in [s["value"] for s in STATUS_OPCOES]:
+        status = "todos"
+    if tipo not in [t["value"] for t in TIPOS_ESTOQUE]:
+        tipo = "Receita"
+    if not carteira:
+        carteira = "todas"
+
+    return {"ano": ano, "tipo": tipo, "status": status, "carteira": carteira}
 
 
 def _contexto_comum(request, titulo_pagina):
@@ -85,23 +108,17 @@ def _contexto_comum(request, titulo_pagina):
     }
 
 
-# ---------- Views ----------
+# ---------- Views existentes ----------
 def resumo(request):
     ctx = _contexto_comum(request, "Início · Falconi")
     return render(request, "home.html", ctx)
 
 
 def receita(request):
-    """
-    Cascata com dados reais via calcular_cascata(cfg, mes, status, carteira).
-    Mantém fallback seguro (zeros) se o pipeline falhar/local sem conectores.
-    """
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
 
     cfg = Config(
-        # Se quiser, ajuste caminhos/projeto aqui:
-        # access_db_resultado=r"C:\...\BD_Resultado.accdb",
-        # ...
+        # Ajuste caminhos/credenciais se desejar
         # bigquery_project_id="seu-projeto-gcp",
     )
 
@@ -155,7 +172,6 @@ def produtos(request):
     return render(request, "receita/produtos.html", ctx)
 
 
-# NOVAS ABAS
 def pendente_formacao(request):
     ctx = _contexto_comum(request, "Pendente Formação · Falconi")
     cfg = Config()
@@ -183,13 +199,69 @@ def receita_potencial(request):
     return render(request, "receita/receita_potencial.html", ctx)
 
 
-# EXPORTAÇÃO GENÉRICA
+# ---------- NOVAS VIEWS: ESTOQUE ----------
+def estoque(request):
+    """
+    Página do gráfico em cascata de Estoque (ano 2025..2029), sem 'GAP Meta'.
+    """
+    # contexto base + adiciona listas de ANOS/CARTEIRAS/STATUS
+    ctx = _contexto_comum(request, "Estoque (Cascata) · Falconi")
+    filtros_e = _get_filtros_estoque(request)
+    ctx["ANOS"] = ANOS
+    ctx["filtros_estoque"] = filtros_e
+
+    cfg = Config()
+
+    try:
+        dados = calcular_cascata_estoque(cfg, int(filtros_e["ano"]), filtros_e["status"], filtros_e["carteira"])
+        ctx["waterfall_data"] = dados
+    except Exception as e:
+        print("[estoque] Erro ao calcular cascata:", e)
+        import traceback; traceback.print_exc()
+        ctx["waterfall_data"] = [
+            {"label": "Receita PoC", "valor": 0},
+            {"label": "Receita Success Fee", "valor": 0},
+            {"label": "Receita Produtos", "valor": 0},
+            {"label": "Pendente Formação de Equipe", "valor": 0},
+            {"label": "Pendente Assinatura", "valor": 0},
+            {"label": "Receita Potencial", "valor": 0},
+            {"label": "Total", "valor": 0},
+        ]
+
+    return render(request, "estoque/estoque.html", ctx)
+
+
+def estoque_detalhes(request):
+    """
+    Tabela anual de Estoque (Carteira/Cliente/Frente × 2025..2029), filtrando por tipo de receita.
+    """
+    ctx = _contexto_comum(request, "Detalhes de Estoque · Falconi")
+    filtros_e = _get_filtros_estoque(request)
+    ctx["ANOS"] = ANOS
+    ctx["TIPOS_ESTOQUE"] = TIPOS_ESTOQUE
+    ctx["filtros_estoque"] = filtros_e
+
+    cfg = Config()
+
+    try:
+        df = tabela_estoque(cfg, int(filtros_e["ano"]), filtros_e["tipo"], filtros_e["status"], filtros_e["carteira"])
+    except Exception as e:
+        print("[estoque_detalhes] Erro na tabela:", e)
+        import traceback; traceback.print_exc()
+        df = pd.DataFrame()
+
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    return render(request, "estoque/detalhes.html", ctx)
+
+
+# ---------- EXPORTAÇÃO ----------
 def exportar_excel(request, tipo: str):
     """
     tipos suportados:
       - 'poc' | 'success_fee' | 'produtos'
       - 'pend_formacao' | 'pend_assinatura' | 'potencial'
-    Gera um .xlsx com uma aba "dados" contendo o DataFrame cru (após filtros).
+      - 'estoque' (detalhes de estoque por tipo)
+    Gera um .xlsx com uma aba "dados".
     """
     f = _get_filtros(request)
     cfg = Config()
@@ -206,6 +278,11 @@ def exportar_excel(request, tipo: str):
         df = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"]); fname = "pendente_assinatura_2025.xlsx"
     elif tipo == "potencial":
         df = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"]); fname = "receita_potencial_2025.xlsx"
+    elif tipo == "estoque":
+        # usa filtros específicos de estoque
+        fe = _get_filtros_estoque(request)
+        df = tabela_estoque(cfg, int(fe["ano"]), fe["tipo"], fe["status"], fe["carteira"])
+        fname = f"estoque_{fe['tipo'].replace(' ', '_').lower()}_{fe['ano']}.xlsx"
     else:
         df = pd.DataFrame(); fname = "export.xlsx"
 

@@ -255,6 +255,53 @@ def _pivot_mensal_2025(df, valor_col: str):
 
     return pivot
 
+def _filtrar_ano(df, ano: int):
+    """
+    Filtra o DataFrame pelo ano na coluna 'mes_calendario'.
+    Se não houver coluna/DF vazio, retorna como está (ou vazio).
+    """
+    import pandas as pd
+    if df is None or df.empty:
+        return df
+    if "mes_calendario" not in df.columns:
+        return df
+    s = pd.to_datetime(df["mes_calendario"], errors="coerce")
+    return df[s.dt.year == int(ano)]
+
+
+def _pivot_anual(df, valor_col: str, anos=(2025, 2026, 2027, 2028, 2029)):
+    """
+    Espera colunas: Check (carteira), nome_cliente, codigo_frente, mes_calendario, <valor_col>
+    Gera pivot com colunas anos + Total por linha.
+    Fallback: pivot vazio com cabeçalho padrão.
+    """
+    import pandas as pd
+
+    cols_out = ["Carteira", "Cliente", "Frente"] + [str(a) for a in anos] + ["Total"]
+    if df is None or df.empty or valor_col not in getattr(df, "columns", []):
+        return pd.DataFrame(columns=cols_out)
+
+    base = df.copy()
+    base["Carteira"] = base.get("Check", "")
+    base["Cliente"] = base.get("nome_cliente", "")
+    base["Frente"]  = base.get("codigo_frente", "")
+
+    base["ano"] = pd.to_datetime(base["mes_calendario"], errors="coerce").dt.year
+
+    grp = base.groupby(["Carteira", "Cliente", "Frente", "ano"], dropna=False)[valor_col].sum().reset_index()
+    pv  = grp.pivot_table(index=["Carteira", "Cliente", "Frente"], columns="ano", values=valor_col, aggfunc="sum").fillna(0.0)
+
+    for a in anos:
+        if a not in pv.columns:
+            pv[a] = 0.0
+    pv = pv[[a for a in anos]]
+
+    pv["Total"] = pv.sum(axis=1)
+    pv = pv.reset_index()
+    pv.columns = ["Carteira", "Cliente", "Frente"] + [str(a) for a in anos] + ["Total"]
+    return pv
+
+
 def tabela_poc(cfg: "Config", mes: str, status: str, carteira: str):
     """
     Tabela de Receita PoC (linhas: Carteira/Cliente/Frente, colunas: meses 2025).
@@ -303,7 +350,6 @@ def tabela_produtos(cfg: "Config", mes: str, status: str, carteira: str):
     except Exception:
         import traceback; traceback.print_exc()
         return pd.DataFrame()
-
 
 def tabela_pendente_formacao(cfg: "Config", mes: str, status: str, carteira: str):
     """
@@ -404,3 +450,154 @@ def tabela_receita_potencial(cfg: "Config", mes: str, status: str, carteira: str
     except Exception:
         traceback.print_exc()
         return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+def calcular_cascata_estoque(cfg: "Config", ano: int, status: str, carteira: str):
+    """
+    Soma os blocos do gráfico de Estoque (sem 'GAP Meta') a partir do dataset consolidado
+    (preferência: tF_Vendas_long filtrando Atributo) ou fontes específicas quando existirem.
+    Aplica _aplicar_filtros_basicos e filtro por ano.
+    Blocos: Receita PoC, Receita Success Fee, Receita Produtos, Pendente Formação de Equipe,
+            Pendente Assinatura, Receita Potencial, Total.
+    """
+    import pandas as pd
+
+    dfs = carregar_pipeline(cfg)
+
+    # Preferir long consolidado se existir
+    src = dfs.get("tF_Vendas_long")
+    if src is None or src.empty:
+        # fallback: concat de fontes conhecidas
+        frames = []
+        for k in ["Receita_PoC", "Receita_Produto", "Receita_SuccessFee", "Pendente_Alocacao_HD", "Vendas"]:
+            if k in dfs and dfs[k] is not None:
+                frames.append(dfs[k])
+        src = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+    src = _aplicar_filtros_basicos(src, mes="tudo", status=status, carteira=carteira)
+    src = _filtrar_ano(src, ano)
+
+    keys = {
+        "ReceitaPoC": "Receita PoC",
+        "SuccessFee": "Receita Success Fee",
+        "ReceitaProduto": "Receita Produtos",
+        "ReceitaPendenteAlocMes": "Pendente Formação de Equipe",
+        "ReceitaPendenteAssinatura": "Pendente Assinatura",
+        "ReceitaPotencialPocMes": "Receita Potencial",
+    }
+
+    valores = {label: 0.0 for label in keys.values()}
+
+    if "Atributo" in src.columns and "Valor" in src.columns:
+        # formato long explodido
+        subset = src[src["Atributo"].isin(keys.keys())]
+        if not subset.empty:
+            grp = subset.groupby("Atributo")["Valor"].sum()
+            for k_attr, label in keys.items():
+                v = float(grp.get(k_attr, 0) or 0)
+                valores[label] = round(v, 2)
+    else:
+        # colunas separadas
+        def soma(col):
+            return float(pd.to_numeric(src.get(col), errors="coerce").fillna(0).sum()) if col in src.columns else 0.0
+        valores["Receita PoC"]                 = round(soma("ReceitaPoC"), 2)
+        valores["Receita Success Fee"]         = round(soma("SuccessFee"), 2)
+        valores["Receita Produtos"]            = round(soma("ReceitaProduto"), 2)
+        valores["Pendente Formação de Equipe"] = round(soma("ReceitaPendenteAlocMes"), 2)
+        valores["Pendente Assinatura"]         = round(soma("ReceitaPendenteAssinatura"), 2)
+        valores["Receita Potencial"]           = round(soma("ReceitaPotencialPocMes"), 2)
+
+    total = round(sum(valores.values()), 2)
+
+    ordem = [
+        "Receita PoC",
+        "Receita Success Fee",
+        "Receita Produtos",
+        "Pendente Formação de Equipe",
+        "Pendente Assinatura",
+        "Receita Potencial",
+        "Total",
+    ]
+
+    dados = [{"label": lab, "valor": (valores[lab] if lab != "Total" else total)} for lab in ordem]
+    return dados
+
+
+def tabela_estoque(cfg: "Config", ano: int, tipo: str, status: str, carteira: str):
+    """
+    Devolve uma tabela anual no formato Carteira/Cliente/Frente × Anos (2025..2029),
+    respeitando o Tipo de Receita e os filtros. Fallback: DF vazio se fonte/coluna não existir.
+
+    Tipos aceitos (case-insensitive):
+      - "Pendente Formação"  -> ReceitaPendenteAlocMes  (cands: Pendente_Alocacao_HD, tF_Vendas_long, Vendas)
+      - "Receita"            -> ReceitaPoC              (cands: Receita_PoC, tF_Vendas_long, Vendas)
+      - "Receita Produto"    -> ReceitaProduto          (cands: Receita_Produto, Carteira_Produto, tF_Vendas_long)
+      - "Success Fee"        -> SuccessFee              (cands: Receita_SuccessFee, tF_Vendas_long)
+    """
+    import pandas as pd
+
+    mapa = {
+        "pendente formação": {
+            "valor_col": "ReceitaPendenteAlocMes",
+            "candidatos": ["Pendente_Alocacao_HD", "tF_Vendas_long", "Vendas"],
+            "attr_match": "ReceitaPendenteAlocMes",
+        },
+        "receita": {
+            "valor_col": "ReceitaPoC",
+            "candidatos": ["Receita_PoC", "tF_Vendas_long", "Vendas"],
+            "attr_match": "ReceitaPoC",
+        },
+        "receita produto": {
+            "valor_col": "ReceitaProduto",
+            "candidatos": ["Receita_Produto", "Carteira_Produto", "tF_Vendas_long"],
+            "attr_match": "ReceitaProduto",
+        },
+        "success fee": {
+            "valor_col": "SuccessFee",
+            "candidatos": ["Receita_SuccessFee", "tF_Vendas_long"],
+            "attr_match": "SuccessFee",
+        },
+    }
+
+    tipo_key = (tipo or "").strip().lower()
+    if tipo_key not in mapa:
+        # tipo não reconhecido -> tabela vazia com cabeçalho
+        return _pivot_anual(pd.DataFrame(), "Valor")
+
+    cfg_ = mapa[tipo_key]
+    valor_col = cfg_["valor_col"]
+    cand = cfg_["candidatos"]
+    attr_match = cfg_["attr_match"]
+
+    dfs = carregar_pipeline(cfg)
+
+    src = None
+    for k in cand:
+        d = dfs.get(k)
+        if d is not None and not d.empty:
+            if "Atributo" in d.columns and "Valor" in d.columns:
+                # para o long, só faz sentido se existir a métrica em Atributo
+                if (d["Atributo"] == attr_match).any():
+                    src = d[d["Atributo"] == attr_match].copy()
+                    src[valor_col] = pd.to_numeric(src["Valor"], errors="coerce").fillna(0.0)
+                    break
+            else:
+                # colunas separadas
+                if valor_col in d.columns:
+                    src = d
+                    break
+
+    if src is None:
+        return _pivot_anual(pd.DataFrame(), valor_col)
+
+    src = _aplicar_filtros_basicos(src, mes="tudo", status=status, carteira=carteira)
+    # para tabela anual, não filtramos por 1 ano; geramos 2025..2029
+    # mas garantimos que 'mes_calendario' exista e seja válida
+    if "mes_calendario" not in src.columns:
+        return _pivot_anual(pd.DataFrame(), valor_col)
+
+    # Se viemos do long, já colocamos valor_col acima; caso contrário, apenas garantimos numérico
+    if valor_col not in src.columns:
+        return _pivot_anual(pd.DataFrame(), valor_col)
+    src[valor_col] = pd.to_numeric(src[valor_col], errors="coerce").fillna(0.0)
+
+    return _pivot_anual(src, valor_col)
