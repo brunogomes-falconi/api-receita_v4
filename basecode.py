@@ -123,7 +123,7 @@ def tD_meta_vendas_td(cfg: Config) -> pd.DataFrame:
         df.columns = df.iloc[0]
         df = df.iloc[1:].copy()
     long_df = df.melt(id_vars=["Carteira"], var_name="Atributo", value_name="Valor")
-    long_df["mes_calendario"] = pd.to_datetime(long_df["Atributo"], errors="coerce").dt.date
+    long_df["mes_calendario"] = pd.to_datetime(long_df["Atributo"], errors="coerce", dayfirst=True).dt.date
     long_df["MetaVendas"] = pd.to_numeric(long_df["Valor"], errors="coerce").fillna(0.0)
     long_df = long_df.rename(columns={"Carteira": "Check"})
     return long_df[["Check", "mes_calendario", "MetaVendas"]]
