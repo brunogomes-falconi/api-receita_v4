@@ -63,7 +63,7 @@ def _get_filtros(request):
 def _contexto_comum(request, titulo_pagina):
     filtros = _get_filtros(request)
 
-    # A Config de basecode.py não aceita 'use_access'; instancie sem argumentos.
+    # A Config do basecode.py não aceita 'use_access'; instancie sem argumentos.
     cfg = Config()
 
     try:
@@ -102,20 +102,19 @@ def receita(request):
     """
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
 
-    # Ajuste aqui conforme seu ambiente:
-    # - Enquanto não tiver o driver do Access (ACE + pyodbc) instalado, deixe use_access=False.
-    # - Quando instalar e apontar os caminhos, troque para use_access=True.
-    # - Se quiser, já preencha caminhos específicos do seu basecode.py (comentados abaixo).
+    # Instancie a Config do seu basecode.py sem 'use_access' (esse campo não existe).
+    # Quando o driver do Access (ACE/pyodbc) estiver instalado e os caminhos corretos,
+    # basta garantir que os paths em Config apontem para suas bases. Opcionalmente,
+    # preencha explicitamente algum caminho/campo abaixo.
     cfg = Config(
-        # Exemplo de preenchimento quando quiser usar caminhos explícitos:
-        # access_db_resultado=r"C:\caminho\para\BD_Resultado.accdb",
-        # access_db_razao=r"C:\caminho\para\Base_Razao.accdb",
-        # access_db_caixa=r"C:\caminho\para\Base_Caixa.accdb",
-        # access_db_roda_razao=r"C:\caminho\para\Roda_Base_Razao.accdb",
-        # xlsx_depara_un=r"C:\caminho\para\DePara_UN.xlsx",
-        # csv_meta_receita=r"C:\caminho\para\meta_receita.csv",
+        # Exemplo (descomente e ajuste se quiser forçar caminhos locais):
+        # access_db_resultado=r"C:\caminho\BD_Resultado.accdb",
+        # access_db_razao=r"C:\caminho\Base_Razao.accdb",
+        # access_db_caixa=r"C:\caminho\Base_Caixa.accdb",
+        # access_db_roda_razao=r"C:\caminho\Roda_Base_Razao.accdb",
+        # xlsx_depara_un=r"C:\caminho\DePara_UN.xlsx",
+        # csv_meta_receita=r"C:\caminho\meta_receita.csv",
         # bigquery_project_id="seu-projeto-gcp",
-        use_access=False,  # <<< troque para True quando o driver do Access estiver OK
     )
 
     filtros = ctx["filtros"]
