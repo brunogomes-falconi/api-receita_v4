@@ -123,3 +123,23 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Cache em memória para acelerar o pipeline e derivadas ---
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "api-receita-v4-locmem",
+    }
+}
+
+# TTL padrão (em segundos) para resultados do pipeline e agregações
+CACHE_TTL_SECONDS = 60  # 1 min; ajuste se quiser mais/menos
+
+# (Opcional) WhiteNoise para estáticos mais rápidos (mesmo em dev)
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # <- opcional
+    # ... o restante permanece igual
+] + MIDDLEWARE[2:] if "whitenoise.middleware.WhiteNoiseMiddleware" not in MIDDLEWARE else MIDDLEWARE
+
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"

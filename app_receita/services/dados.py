@@ -4,6 +4,10 @@ import pandas as pd
 from datetime import date
 from typing import Any, Dict, List, Tuple
 import traceback
+from django.conf import settings
+from django.core.cache import cache
+import hashlib
+import json
 
 # importa seu pipeline
 # se você escolheu outro nome de arquivo, troque "basecode" abaixo
@@ -27,6 +31,34 @@ DEPARA_EXIBICAO = {
     # adicione outros casos reais se houver
 }
 
+def _cfg_cache_key(cfg: "Config") -> str:
+    # usa a representação simples da Config para gerar uma chave estável
+    payload = {
+        k: getattr(cfg, k, None)
+        for k in sorted(getattr(cfg, "__dataclass_fields__", {}).keys())
+    } if hasattr(cfg, "__dataclass_fields__") else cfg.__dict__
+    s = json.dumps(payload, sort_keys=True, default=str)
+    return "cfg:" + hashlib.md5(s.encode("utf-8")).hexdigest()
+
+def _key(prefix: str, **parts) -> str:
+    s = json.dumps(parts, sort_keys=True, default=str)
+    return f"{prefix}:{hashlib.md5(s.encode('utf-8')).hexdigest()}"
+
+def _ttl() -> int:
+    return int(getattr(settings, "CACHE_TTL_SECONDS", 300))
+
+def _limit_rows(df, max_rows: int = 200):
+    try:
+        n = int(max_rows)
+    except Exception:
+        n = 200
+    if df is None or getattr(df, "empty", True):
+        return df, 0, 0
+    total = int(df.shape[0])
+    if total <= n:
+        return df, total, total
+    return df.head(n), total, n
+
 # Quando receber da UI "América do Norte", podemos ter de mapear para o valor interno do dado:
 DEPARA_INTERNO = {v: k for k, v in DEPARA_EXIBICAO.items()}
 
@@ -36,12 +68,22 @@ def _ajustar_carteira_para_interno(valor_ui: str) -> str:
 def _ajustar_carteira_para_ui(valor_dado: str) -> str:
     return DEPARA_EXIBICAO.get(valor_dado, valor_dado)
 
-def carregar_pipeline(cfg: Config) -> Dict[str, "pd.DataFrame"]:
+def carregar_pipeline(cfg: "Config", nocache: bool = False) -> Dict[str, "pd.DataFrame"]:
     """
-    Executa seu pipeline e retorna o dicionário de DataFrames.
-    Se der erro (ex.: falta driver do Access), propaga a exceção.
+    Executa seu pipeline e retorna o dicionário de DataFrames, com cache (TTL).
+    Use nocache=True para forçar recálculo (ex.: ?nocache=1).
     """
-    return run_pipeline(cfg)
+    from basecode import run_pipeline  # import local p/ evitar custo se não usar
+    if nocache:
+        return run_pipeline(cfg)
+
+    key = _key("pipeline", cfg=_cfg_cache_key(cfg))
+    data = cache.get(key)
+    if data is not None:
+        return data
+    data = run_pipeline(cfg)
+    cache.set(key, data, timeout=_ttl())
+    return data
 
 # --- nomes oficiais de UI que você definiu ---
 CARTEIRAS_UI_OFICIAIS = [
@@ -67,13 +109,14 @@ def _ajustar_carteira_para_interno(valor_ui: str) -> str:
 def _ajustar_carteira_para_ui(valor_dado: str) -> str:
     return DEPARA_EXIBICAO.get(valor_dado, valor_dado)
 
-def listar_carteiras_ui(cfg: "Config") -> list[str]:
-    """
-    Lê carteiras do pipeline, aplica de/para para UI e
-    GARANTE presença dos nomes oficiais definidos por você.
-    """
+def listar_carteiras_ui(cfg: "Config", nocache: bool = False) -> list[str]:
+    if not nocache:
+        k = _key("carteiras_ui", cfg=_cfg_cache_key(cfg))
+        cached = cache.get(k)
+        if cached is not None:
+            return cached
     try:
-        dfs = carregar_pipeline(cfg)
+        dfs = carregar_pipeline(cfg, nocache=nocache)
     except Exception:
         dfs = {}
 
@@ -86,11 +129,13 @@ def listar_carteiras_ui(cfg: "Config") -> list[str]:
                 for v in df[col].dropna().astype(str):
                     candidatos.add(_ajustar_carteira_para_ui(v))
 
-    # mistura com a lista oficial e ordena
     combinada = set(CARTEIRAS_UI_OFICIAIS) | candidatos
-    # devolve em ordem: oficiais primeiro, depois extras em alfabética
     extras = sorted([x for x in combinada if x not in CARTEIRAS_UI_OFICIAIS])
-    return CARTEIRAS_UI_OFICIAIS + extras
+    out = CARTEIRAS_UI_OFICIAIS + extras
+
+    if not nocache:
+        cache.set(k, out, timeout=_ttl())
+    return out
 
 def _aplicar_filtros_basicos(df, mes: str, status: str, carteira: str):
     """

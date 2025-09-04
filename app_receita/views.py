@@ -3,6 +3,9 @@ from django.http import HttpResponse
 import pandas as pd
 from io import BytesIO
 
+from django.views.decorators.cache import cache_page
+from django.utils.decorators import method_decorator  # se quiser usar em CBVs no futuro
+
 from app_receita.services.dados import (
     Config,
     calcular_cascata,
@@ -106,6 +109,9 @@ def _contexto_comum(request, titulo_pagina):
         "STATUS_OPCOES": STATUS_OPCOES,
         "CARTEIRAS": carteiras_options,
     }
+
+def _is_nocache(request):
+    return request.GET.get("nocache") in ("1", "true", "yes")
 
 
 # ---------- Views existentes ----------
