@@ -120,6 +120,36 @@ def _normalize_carteira(s: pd.Series) -> pd.Series:
     }
     return s.replace(rep)
 
+def _coerce_key_str(df, col: str):
+    """
+    Normaliza a coluna-chave para string (dtype 'string') e remove espaços.
+    Se DF for vazio ou não tiver a coluna, devolve como veio.
+    """
+    import pandas as pd
+    if df is None or df is pd.NA:
+        return df
+    if not hasattr(df, "columns") or col not in df.columns:
+        return df
+    df[col] = df[col].astype("string").str.strip()
+    return df
+
+def _parse_mes_calendario_from_atributo(series):
+    """
+    Tenta parsear datas em ordem:
+      1) dd/mm/aaaa
+      2) aaaa-mm
+      3) fallback dateutil (dayfirst=True)
+    Retorna dtype date (ou NaT convertido para NaN quando apropriado via errors='coerce').
+    """
+    import pandas as pd
+    s = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+    m = s.isna()
+    if m.any():
+        s.loc[m] = pd.to_datetime(series[m], format="%Y-%m", errors="coerce")
+    m = s.isna()
+    if m.any():
+        s.loc[m] = pd.to_datetime(series[m], errors="coerce", dayfirst=True)
+    return s.dt.date
 
 # ===================== tD_* auxiliares (CSV/Excel) ===================== #
 
@@ -129,7 +159,7 @@ def tD_meta_vendas_td(cfg: Config) -> pd.DataFrame:
         df.columns = df.iloc[0]
         df = df.iloc[1:].copy()
     long_df = df.melt(id_vars=["Carteira"], var_name="Atributo", value_name="Valor")
-    long_df["mes_calendario"] = pd.to_datetime(long_df["Atributo"], errors="coerce", dayfirst=True).dt.date
+    long_df["mes_calendario"] = _parse_mes_calendario_from_atributo(long_df["Atributo"])
     long_df["MetaVendas"] = pd.to_numeric(long_df["Valor"], errors="coerce").fillna(0.0)
     long_df = long_df.rename(columns={"Carteira": "Check"})
     return long_df[["Check", "mes_calendario", "MetaVendas"]]
@@ -142,7 +172,7 @@ def tD_metas(cfg: Config) -> pd.DataFrame:
         df = df.iloc[1:].copy()
     value_cols = [c for c in df.columns if c not in ["Carteira", "Carteira_Cross", "Classificação venda", "classificacaooportunidade__c"]]
     long_df = df.melt(id_vars=["Carteira"], value_vars=value_cols, var_name="Atributo", value_name="Valor")
-    long_df["mes_calendario"] = pd.to_datetime(long_df["Atributo"], errors="coerce", dayfirst=True).dt.date
+    long_df["mes_calendario"] = _parse_mes_calendario_from_atributo(long_df["Atributo"])
     long_df["Valor"] = pd.to_numeric(long_df["Valor"], errors="coerce").fillna(0.0)
     agg = long_df.groupby(["Carteira", "mes_calendario"], dropna=False)["Valor"].mean().reset_index()
     agg = agg.rename(columns={"Carteira": "Check", "Valor": "MetaVendas"})
@@ -155,7 +185,7 @@ def tD_meta(cfg: Config) -> pd.DataFrame:
         df.columns = df.iloc[0]
         df = df.iloc[1:].copy()
     long_df = df.melt(id_vars=["Carteira"], var_name="Atributo", value_name="Valor")
-    long_df["mes_calendario"] = pd.to_datetime(long_df["Atributo"], errors="coerce", dayfirst=True).dt.date
+    long_df["mes_calendario"] = _parse_mes_calendario_from_atributo(long_df["Atributo"])
     long_df["ReceitaMeta"] = pd.to_numeric(long_df["Valor"], errors="coerce").fillna(0.0) * 1000.0
     long_df = long_df.rename(columns={"Carteira": "Check"})
     return long_df[["Check", "mes_calendario", "ReceitaMeta"]]
@@ -532,57 +562,160 @@ def tbl_pendente_alocacao_hd_v2(
     cfg: Config,
     aux_pendente_frentes: pd.DataFrame,
     aux_pendente_razao: pd.DataFrame,
-    dim_equipes: pd.DataFrame
+    dim_equipes: pd.DataFrame,
 ) -> pd.DataFrame:
-    df = _read_access_table(cfg.access_db_resultado, "tbl_OpportunityVendasCompleta")
-    cols = ["Frente","Numero de HDs","StatusConsultoria","Classificacaofrente","Valor_Frente","Cliente","CarteiraAtual"]
-    df = df[cols].copy()
-    df.rename(columns={"Numero de HDs":"Numero_HD"}, inplace=True)
-    df["Numero_HD"] = pd.to_numeric(df["Numero_HD"], errors="coerce").fillna(0).astype(int)
-    df["Frente"] = pd.to_numeric(df["Frente"], errors="coerce").astype("Int64")
+    """
+    Calcula a pendência de alocação por HD distribuindo o valor da oportunidade
+    proporcionalmente à QTD_HD da equipe e projetando para o mês corrente em diante.
 
-    problem = {"Cancelado","Interrompido","Não encontrado","Substituído"}
-    opp = df[(df["Numero_HD"]>0) & (df["Classificacaofrente"]!="Produto") & (~df["StatusConsultoria"].isin(problem))].copy()
+    Retorno: colunas ["Check","mes_calendario","codigo_frente","nome_cliente","ReceitaPendenteAlocMes"]
+    """
 
-    poc = aux_pendente_frentes.rename(columns={"codigo_frente":"Frente"})[["Frente"]].drop_duplicates()
-    razao = aux_pendente_razao.rename(columns={"Frente":"Frente"})[["Frente"]].drop_duplicates()
+    # ====== Guardas para ambiente sem Access ou falhas de leitura ======
+    empty_out = pd.DataFrame(
+        columns=["Check", "mes_calendario", "codigo_frente", "nome_cliente", "ReceitaPendenteAlocMes"]
+    )
+
+    if not getattr(cfg, "use_access", True):
+        return empty_out
+
+    try:
+        df = _read_access_table(cfg.access_db_resultado, "tbl_OpportunityVendasCompleta")
+    except Exception:
+        return empty_out
+
+    if df is None or df.empty:
+        return empty_out
+
+    # ====== Seleção/normalização de colunas básicas ======
+    needed = {"Frente", "Numero de HDs", "StatusConsultoria", "Classificacaofrente", "Valor_Frente", "Cliente", "CarteiraAtual"}
+    missing = needed - set(df.columns)
+    if missing:
+        # Se não tiver as colunas mínimas, retorna vazio sem quebrar
+        return empty_out
+
+    opp = df[list(needed)].copy()
+    opp = opp.rename(columns={"Numero de HDs": "Numero_HD"})
+    opp["Numero_HD"] = pd.to_numeric(opp["Numero_HD"], errors="coerce").fillna(0).astype(int)
+    # *** padroniza Frente como Int64 para evitar conflitos de tipo ***
+    opp["Frente"] = pd.to_numeric(opp["Frente"], errors="coerce").astype("Int64")
+
+    # Filtra oportunidades elegíveis
+    problem = {"Cancelado", "Interrompido", "Não encontrado", "Substituído"}
+    opp = opp[
+        (opp["Numero_HD"] > 0)
+        & (opp["Classificacaofrente"] != "Produto")
+        & (~opp["StatusConsultoria"].isin(problem))
+    ].copy()
+
+    # ====== Padroniza chaves dos auxiliares (sempre Int64) ======
+    def _coerce_frente(df_in: pd.DataFrame, prefer: str, alt: str) -> pd.DataFrame:
+        if df_in is None or df_in.empty:
+            return pd.DataFrame({"Frente": pd.Series([], dtype="Int64")})
+        col = prefer if prefer in df_in.columns else (alt if alt in df_in.columns else None)
+        if col is None:
+            return pd.DataFrame({"Frente": pd.Series([], dtype="Int64")})
+        out = df_in[[col]].copy()
+        out["Frente"] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+        out = out.dropna(subset=["Frente"]).drop_duplicates(subset=["Frente"])
+        return out[["Frente"]]
+
+    poc   = _coerce_frente(aux_pendente_frentes, prefer="codigo_frente", alt="Frente")
+    razao = _coerce_frente(aux_pendente_razao,   prefer="Frente",          alt="codigo_frente")
+
+    # Marca frentes que já estão em PoC ou já constam na Razão
     opp = opp.merge(poc.assign(in_poc=1), on="Frente", how="left")
     opp = opp.merge(razao.assign(in_razao=1), on="Frente", how="left")
-    opp = opp[(opp["in_poc"].isna()) & (opp["in_razao"].isna()) & (opp["StatusConsultoria"]=="A iniciar")].copy()
 
-    rec = (opp.groupby(["CarteiraAtual","Frente","Cliente"], dropna=False)["Valor_Frente"]
-              .sum()
-              .reset_index()
-              .rename(columns={"CarteiraAtual":"Check","Frente":"codigo_frente","Cliente":"nome_cliente","Valor_Frente":"ReceitaPendAloc"}))
+    # Considera apenas "A iniciar" que não estão nem em PoC nem na Razão
+    opp = opp[(opp["in_poc"].isna()) & (opp["in_razao"].isna()) & (opp["StatusConsultoria"] == "A iniciar")].copy()
+
+    if opp.empty:
+        return empty_out
+
+    # Agrupa valor por Carteira/Frente/Cliente
+    rec = (
+        opp.groupby(["CarteiraAtual", "Frente", "Cliente"], dropna=False)["Valor_Frente"]
+        .sum()
+        .reset_index()
+        .rename(
+            columns={
+                "CarteiraAtual": "Check",
+                "Frente": "codigo_frente",
+                "Cliente": "nome_cliente",
+                "Valor_Frente": "ReceitaPendAloc",
+            }
+        )
+    )
+
+    # ====== Dimensionamento (para distribuição por QTD_HD e projeção temporal) ======
+    if dim_equipes is None or dim_equipes.empty:
+        return empty_out
 
     dim = dim_equipes.copy()
+    # Normalizações robustas
+    if "codigofrente" not in dim.columns:
+        # não há como relacionar sem o código da frente
+        return empty_out
+
     dim["codigofrente"] = pd.to_numeric(dim["codigofrente"], errors="coerce").astype("Int64")
-    dim["PER_REF"] = pd.to_datetime(dim["PER_REF"], errors="coerce")
-    dim["QTD_HD"] = pd.to_numeric(dim["QTD_HD"], errors="coerce").fillna(0).astype(int)
+    if "PER_REF" in dim.columns:
+        dim["PER_REF"] = pd.to_datetime(dim["PER_REF"], errors="coerce")
+    else:
+        # sem PER_REF, não há como datar: retorna vazio
+        return empty_out
+
+    if "QTD_HD" in dim.columns:
+        dim["QTD_HD"] = pd.to_numeric(dim["QTD_HD"], errors="coerce").fillna(0).astype(int)
+    else:
+        dim["QTD_HD"] = 0
 
     cur = start_of_current_month()
     dim["PER_REF"] = dim["PER_REF"].fillna(cur)
 
+    # Join com dimensionamento
     jd = rec.merge(dim, left_on="codigo_frente", right_on="codigofrente", how="left")
+
+    if jd.empty:
+        return empty_out
+
+    # Total de HDs por frente para rateio
     tot = jd.groupby("codigo_frente", dropna=False)["QTD_HD"].sum().rename("TotalHD").reset_index()
     jd = jd.merge(tot, on="codigo_frente", how="left")
 
+    # Calcula deslocamento de meses (se PER_REF < mês corrente)
     mmin = jd.groupby("codigo_frente", dropna=False)["PER_REF"].min().rename("MinPER").reset_index()
     jd = jd.merge(mmin, on="codigo_frente", how="left")
-    jd["MesesDeslocar"] = np.where(jd["MinPER"] < cur, (cur.year-jd["MinPER"].dt.year)*12 + (cur.month-jd["MinPER"].dt.month), 0)
+    jd["MesesDeslocar"] = np.where(
+        jd["MinPER"] < cur,
+        (cur.year - jd["MinPER"].dt.year) * 12 + (cur.month - jd["MinPER"].dt.month),
+        0,
+    )
 
-    def _calc_row(row):
-        if pd.isna(row["TotalHD"]) or row["TotalHD"] == 0:
+    # Expande por linha: calcula o mês e o valor rateado
+    def _calc_row(row: pd.Series) -> pd.Series:
+        total_hd = row.get("TotalHD", 0)
+        qtd_hd = row.get("QTD_HD", 0)
+        per_ref = row.get("PER_REF", pd.NaT)
+
+        if pd.isna(total_hd) or total_hd == 0 or pd.isna(per_ref):
             return pd.Series({"mes_calendario": pd.NaT, "ReceitaPendenteAlocMes": np.nan})
-        valor = row["ReceitaPendAloc"] * (row["QTD_HD"] / row["TotalHD"])
-        mes = (row["PER_REF"] + pd.DateOffset(months=int(row["MesesDeslocar"]))).normalize()
+
+        valor = row.get("ReceitaPendAloc", 0.0) * (qtd_hd / total_hd)
+        mes = (per_ref + pd.DateOffset(months=int(row.get("MesesDeslocar", 0)))).normalize()
         return pd.Series({"mes_calendario": mes, "ReceitaPendenteAlocMes": valor})
 
     out = jd.join(jd.apply(_calc_row, axis=1))
     out = out[out["mes_calendario"].notna()].copy()
     out = out[out["mes_calendario"] >= cur].copy()
+
+    if out.empty:
+        return empty_out
+
     out["mes_calendario"] = out["mes_calendario"].dt.date
-    return out[["Check","mes_calendario","codigo_frente","nome_cliente","ReceitaPendenteAlocMes"]]
+    out["ReceitaPendenteAlocMes"] = pd.to_numeric(out["ReceitaPendenteAlocMes"], errors="coerce").fillna(0.0)
+
+    return out[["Check", "mes_calendario", "codigo_frente", "nome_cliente", "ReceitaPendenteAlocMes"]]
 
 
 def tbl_vendas(cfg: Config) -> pd.DataFrame:
