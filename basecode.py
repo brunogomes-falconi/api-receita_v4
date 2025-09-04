@@ -86,14 +86,20 @@ def _read_access_table(db_path: str, table_name: str, where_sql: str | None = No
 
 
 def _read_bigquery_sql(sql: str, project_id: str | None) -> pd.DataFrame:
+    """
+    Lê do BigQuery quando houver project_id; se não houver, retorna DF vazio (fallback)
+    para manter as telas estáveis no modo local/sem credenciais.
+    """
     if project_id is None:
-        raise RuntimeError("Defina Config.bigquery_project_id para usar BigQuery.")
+        # Fallback: nada de raise — devolve DF vazio e deixa os chamadores tratarem.
+        return pd.DataFrame()
+
     try:
-        import pandas_gbq  # type: ignore
+        import pandas_gbq  # type: ignore  # noqa: F401
     except Exception as e:
-        raise RuntimeError(
-            "pandas-gbq não está instalado. Instale `pip install pandas-gbq` e defina GOOGLE_APPLICATION_CREDENTIALS."
-        ) from e
+        # Também não quebra: devolve vazio para manter a UI funcional.
+        return pd.DataFrame()
+
     return pd.read_gbq(sql, project_id=project_id, dialect="standard")
 
 
@@ -428,8 +434,18 @@ def tf_estoque(cfg: Config, tbl_PendenteAlocacao: pd.DataFrame | None = None) ->
 
 
 def tf_frente_equipe_formada(cfg: Config) -> pd.DataFrame:
+    """
+    Antes: assumia que a leitura do BQ sempre trazia 'codigo_frente' e dava KeyError
+    ao tentar df[['codigo_frente']].
+    Agora: trata DF vazio ou sem coluna, devolvendo estrutura compatível.
+    """
     df = _read_bigquery_sql(_SQL_FONTE_GERAL, cfg.bigquery_project_id)
-    return df[["codigo_frente"]].drop_duplicates().copy()
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["codigo_frente"])
+    # Se a coluna não existir, devolve vazia com o cabeçalho esperado.
+    if "codigo_frente" not in df.columns:
+        return pd.DataFrame(columns=["codigo_frente"])
+    return df[["codigo_frente"]].drop_duplicates().reset_index(drop=True)
 
 
 def tf_projeto_risco(cfg: Config) -> pd.DataFrame:

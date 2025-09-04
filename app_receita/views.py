@@ -49,7 +49,6 @@ def _get_filtros(request):
     status = request.GET.get("status", "todos")
     carteira = request.GET.get("carteira", "todas")
 
-    # defaults defensivos
     if mes != "tudo" and mes not in [m["value"] for m in MESES_2025]:
         mes = "tudo"
     if status not in [s["value"] for s in STATUS_OPCOES]:
@@ -62,9 +61,7 @@ def _get_filtros(request):
 
 def _contexto_comum(request, titulo_pagina):
     filtros = _get_filtros(request)
-
-    # A Config do basecode.py não aceita 'use_access'; instancie sem argumentos.
-    cfg = Config()
+    cfg = Config()  # sem use_access
 
     try:
         carteiras_ui = listar_carteiras_ui(cfg)
@@ -96,36 +93,25 @@ def resumo(request):
 
 def receita(request):
     """
-    Página do gráfico em cascata (Receita 2025).
-    Agora usa dados reais do pipeline via calcular_cascata(...).
-    Mantém fallback seguro em caso de erro de conector/coluna.
+    Cascata com dados reais via calcular_cascata(cfg, mes, status, carteira).
+    Mantém fallback seguro (zeros) se o pipeline falhar/local sem conectores.
     """
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
 
-    # Instancie a Config do seu basecode.py sem 'use_access' (esse campo não existe).
-    # Quando o driver do Access (ACE/pyodbc) estiver instalado e os caminhos corretos,
-    # basta garantir que os paths em Config apontem para suas bases. Opcionalmente,
-    # preencha explicitamente algum caminho/campo abaixo.
     cfg = Config(
-        # Exemplo (descomente e ajuste se quiser forçar caminhos locais):
-        # access_db_resultado=r"C:\caminho\BD_Resultado.accdb",
-        # access_db_razao=r"C:\caminho\Base_Razao.accdb",
-        # access_db_caixa=r"C:\caminho\Base_Caixa.accdb",
-        # access_db_roda_razao=r"C:\caminho\Roda_Base_Razao.accdb",
-        # xlsx_depara_un=r"C:\caminho\DePara_UN.xlsx",
-        # csv_meta_receita=r"C:\caminho\meta_receita.csv",
+        # Se quiser, ajuste caminhos/projeto aqui:
+        # access_db_resultado=r"C:\...\BD_Resultado.accdb",
+        # ...
         # bigquery_project_id="seu-projeto-gcp",
     )
 
-    filtros = ctx["filtros"]
+    f = ctx["filtros"]
     try:
-        dados = calcular_cascata(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-        # sanity-check básico: precisa ser lista de dicts com label/valor
+        dados = calcular_cascata(cfg, f["mes"], f["status"], f["carteira"])
         if not isinstance(dados, list) or not all(isinstance(x, dict) for x in dados):
             raise ValueError("Formato inesperado retornado por calcular_cascata.")
         ctx["waterfall_data"] = dados
     except Exception as e:
-        # Loga o erro e mantém o placeholder seguro
         print("[receita] Erro ao calcular cascata:", e)
         import traceback; traceback.print_exc()
         ctx["waterfall_data"] = [
@@ -146,7 +132,8 @@ def poc(request):
     ctx = _contexto_comum(request, "PoC · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_poc(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_poc(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/poc.html", ctx)
 
 
@@ -154,7 +141,8 @@ def success_fee(request):
     ctx = _contexto_comum(request, "Success Fee · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_success_fee(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_success_fee(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/success_fee.html", ctx)
 
 
@@ -162,7 +150,8 @@ def produtos(request):
     ctx = _contexto_comum(request, "Produtos · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_produtos(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_produtos(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/produtos.html", ctx)
 
 
@@ -171,7 +160,8 @@ def pendente_formacao(request):
     ctx = _contexto_comum(request, "Pendente Formação · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_pendente_formacao(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_pendente_formacao(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/pendente_formacao.html", ctx)
 
 
@@ -179,7 +169,8 @@ def pendente_assinatura(request):
     ctx = _contexto_comum(request, "Pendente Assinatura · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/pendente_assinatura.html", ctx)
 
 
@@ -187,7 +178,8 @@ def receita_potencial(request):
     ctx = _contexto_comum(request, "Receita Potencial · Falconi")
     cfg = Config()
     f = ctx["filtros"]
-    ctx["table"] = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    df = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"])
+    ctx["table"] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     return render(request, "receita/receita_potencial.html", ctx)
 
 
@@ -219,7 +211,7 @@ def exportar_excel(request, tipo: str):
 
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        (df if df is not None else pd.DataFrame()).to_excel(writer, index=False, sheet_name="dados")
+        (df if isinstance(df, pd.DataFrame) else pd.DataFrame()).to_excel(writer, index=False, sheet_name="dados")
     bio.seek(0)
 
     resp = HttpResponse(
