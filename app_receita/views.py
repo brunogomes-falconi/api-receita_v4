@@ -1,6 +1,13 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.http import HttpResponse
 from django.views.decorators.cache import cache_page
+
+from django.contrib.auth.decorators import login_required
+from django.contrib import messages
+from django.contrib.auth.models import User
+
+from .models import UserProfile, ViewingPermission
+from .forms import ProfileForm, PermissionGrantForm, PermissionRevokeForm
 
 import pandas as pd
 from io import BytesIO
@@ -39,6 +46,23 @@ STATUS_OPCOES = [
     {"value": "Novo", "label": "Novo"},
     {"value": "Renovação", "label": "Renovação"},
 ]
+
+CARTEIRAS_UI_OFICIAIS = [
+    "Agronegócio",
+    "América do Norte",
+    "Bens Não Duráveis",
+    "Infraestrutura e Indústria de Base",
+    "MID",
+    "Saúde Educação Segurança e Adm.Pública",
+    "Servicos e Tecnologia",
+]
+
+def _carteiras_permitidas_por_role(role: str) -> list[str]:
+    """Mapa simples: ADMIN/CEO/CFO/CTRL enxergam todas; VP/DIR enxergam as suas (a definir no futuro) + concedidas; USER só concedidas."""
+    if role in ("ADMIN", "CEO", "CFO", "CTRL"):
+        return CARTEIRAS_UI_OFICIAIS[:]  # todas
+    # Para VP/DIR, poderíamos associar "carteira própria" ao perfil; por ora, fica vazio e confiamos nas concessões.
+    return []
 
 def _get_filtros(request):
     """
@@ -203,6 +227,76 @@ def receita_potencial(request):
     ctx["table_total_rows"] = total
     ctx["table_limited_rows"] = ctx["table"].shape[0] < total
     return render(request, "receita/receita_potencial.html", ctx)
+
+@login_required
+def opcoes_usuario(request):
+    user = request.user
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+
+    # Carteiras nativas pelo papel + concessões recebidas
+    carteiras_papel = set(_carteiras_permitidas_por_role(profile.role))
+    concedidas = set(ViewingPermission.objects.filter(grantee=user).values_list("portfolio", flat=True))
+    carteiras_efetivas = sorted(carteiras_papel | concedidas)
+
+    if request.method == "POST":
+        # Atualiza preferências do perfil
+        if "save_prefs" in request.POST:
+            form = ProfileForm(request.POST, instance=profile)
+            if form.is_valid():
+                form.save()
+                messages.success(request, "Preferências salvas com sucesso.")
+                return redirect("app_receita:opcoes_usuario")
+            else:
+                messages.error(request, "Verifique os campos de preferências.")
+        # Concede permissão (apenas VP/DIR/ADMIN)
+        elif "grant_perm" in request.POST:
+            if profile.role in ("VP", "DIR", "ADMIN"):
+                pform = PermissionGrantForm(request.POST)
+                if pform.is_valid():
+                    target = pform.cleaned_data["user"]
+                    portfolio = pform.cleaned_data["portfolio"]
+                    if target == user:
+                        messages.error(request, "Você não pode conceder permissão para si mesmo.")
+                    else:
+                        ViewingPermission.objects.get_or_create(
+                            grantee=target, portfolio=portfolio, defaults={"granted_by": user}
+                        )
+                        messages.success(request, f"Permissão de '{portfolio}' concedida a {target.username}.")
+                    return redirect("app_receita:opcoes_usuario")
+                else:
+                    messages.error(request, "Selecione um usuário e uma carteira válidos.")
+            else:
+                messages.error(request, "Você não tem permissão para conceder acessos.")
+                return redirect("app_receita:opcoes_usuario")
+        # Revoga permissão
+        elif "revoke_perm" in request.POST:
+            if profile.role in ("VP", "DIR", "ADMIN"):
+                rform = PermissionRevokeForm(request.POST)
+                if rform.is_valid():
+                    perm_id = rform.cleaned_data["perm_id"]
+                    ViewingPermission.objects.filter(id=perm_id).delete()
+                    messages.success(request, "Permissão revogada.")
+                else:
+                    messages.error(request, "Não foi possível identificar a permissão a revogar.")
+                return redirect("app_receita:opcoes_usuario")
+
+    # GET: prepara forms
+    form = ProfileForm(instance=profile)
+    grant_form = PermissionGrantForm() if profile.role in ("VP", "DIR", "ADMIN") else None
+    minhas_concessoes = ViewingPermission.objects.filter(granted_by=user).select_related("grantee") if grant_form else []
+
+    ctx = {
+        "titulo_pagina": "Opções do Usuário · Falconi",
+        "user_obj": user,
+        "profile": profile,
+        "form": form,
+        "grant_form": grant_form,
+        "minhas_concessoes": minhas_concessoes,
+        "carteiras_efetivas": carteiras_efetivas,
+        "ROLE_LABEL": dict((k, v) for k, v in [("ADMIN","Administrador"),("CEO","CEO"),("CFO","CFO"),
+                                               ("CTRL","Controladoria"),("VP","VP"),("DIR","Diretor"),("USER","Usuário")]),
+    }
+    return render(request, "user/opcoes.html", ctx)
 
 # EXPORTAÇÃO (sem cache p/ garantir arquivo atualizado)
 def exportar_excel(request, tipo: str):

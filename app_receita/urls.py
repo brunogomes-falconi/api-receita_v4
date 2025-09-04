@@ -19,4 +19,6 @@ urlpatterns = [
 
     # exportações (inclui novos tipos pend_formacao, pend_assinatura, potencial e estoque)
     path("exportar/<str:tipo>/", views.exportar_excel, name="exportar_excel"),
+
+    path("opcoes/", views.opcoes_usuario, name="opcoes_usuario"),
 ]

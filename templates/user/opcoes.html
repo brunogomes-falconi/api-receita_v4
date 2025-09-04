@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Opções do Usuário · Falconi{% endblock %}
+
+{% block content %}
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="card p-4">
+        <h2 class="h5">Perfil e Preferências</h2>
+        <p class="mb-1"><strong>Nome:</strong> {{ user_obj.get_full_name|default:user_obj.username }}</p>
+        <p class="mb-1"><strong>E-mail:</strong> {{ user_obj.email }}</p>
+        <p class="mb-3"><strong>Cargo/Papel:</strong> {{ profile.get_role_display }}</p>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary" type="submit" name="save_prefs" value="1">Salvar preferências</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card p-4">
+        <h2 class="h5">Minhas Carteiras (efetivas)</h2>
+        {% if carteiras_efetivas %}
+          <ul class="mb-0">
+            {% for c in carteiras_efetivas %}
+              <li>{{ c }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-muted mb-0">Nenhuma carteira atribuída pelo papel ou por concessão.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if grant_form %}
+    <div class="col-lg-12">
+      <div class="card p-4">
+        <h2 class="h5">Conceder Permissão de Visualização (VP/Diretor)</h2>
+        <form method="post" class="row g-3">
+          {% csrf_token %}
+          <div class="col-md-5">{{ grant_form.user.label_tag }} {{ grant_form.user }}</div>
+          <div class="col-md-5">{{ grant_form.portfolio.label_tag }} {{ grant_form.portfolio }}</div>
+          <div class="col-md-2 d-grid"><button class="btn btn-primary" type="submit" name="grant_perm" value="1">Conceder</button></div>
+        </form>
+
+        <hr class="my-4"/>
+
+        <h3 class="h6 mb-3">Permissões concedidas por mim</h3>
+        {% if minhas_concessoes %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Usuário</th><th>Carteira</th><th>Concedida em</th><th></th></tr></thead>
+              <tbody>
+                {% for p in minhas_concessoes %}
+                  <tr>
+                    <td>{{ p.grantee.username }}</td>
+                    <td>{{ p.portfolio }}</td>
+                    <td>{{ p.created_at|date:"d/m/Y H:i" }}</td>
+                    <td>
+                      <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="perm_id" value="{{ p.id }}"/>
+                        <button class="btn btn-sm btn-outline-danger" type="submit" name="revoke_perm" value="1">Revogar</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-muted mb-0">Nenhuma permissão concedida ainda.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+{% endblock %}

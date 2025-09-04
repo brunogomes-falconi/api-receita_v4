@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Sessão encerrada · Falconi{% endblock %}
+{% block content %}
+<div class="alert alert-success">Você saiu da sessão.</div>
+<p><a class="btn btn-primary" href="{% url 'login' %}">Entrar novamente</a></p>
+{% endblock %}
