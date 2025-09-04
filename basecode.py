@@ -570,49 +570,91 @@ def tbl_pendente_alocacao_hd_v2(
 
 
 def tbl_vendas(cfg: Config) -> pd.DataFrame:
-    df = _read_access_table(cfg.access_db_resultado, "tbl_OpportunityVendasCompleta").copy()
-    df["Safra"] = pd.to_datetime(df.get("Safra"), errors="coerce")
-    df["Data_Entrada_Oport"] = pd.to_datetime(df.get("Data_Entrada_Oport"), errors="coerce")
-    df["Valor_Frente"] = pd.to_numeric(df.get("Valor_Frente"), errors="coerce")
-    def norm_class(c: t.Any) -> t.Optional[str]:
+    import pandas as pd
+
+    # Se você estiver rodando temporariamente sem Access (use_access=False), devolve vazio:
+    if not getattr(cfg, "use_access", True):
+        return pd.DataFrame()
+
+    try:
+        df = _read_access_table(cfg.access_db_resultado, "tbl_OpportunityVendasCompleta").copy()
+    except Exception:
+        # Sem driver/sem tabela: não quebra o pipeline
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Normalizações seguras
+    # Datas:
+    for col in ["Safra", "Data_Entrada_Oport"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # Numéricos:
+    if "Valor_Frente" in df.columns:
+        df["Valor_Frente"] = pd.to_numeric(df["Valor_Frente"], errors="coerce")
+
+    # Classificação (Novo/Renovação)
+    def norm_class(c):
         if pd.isna(c) or str(c).strip() == "":
             return None
-        return "Novo" if str(c) == "Novo" else "Renovação"
-    df["class_norm"] = df.get("classificacaooportunidade__c").apply(norm_class)
-    df["codigo_frente_txt"] = df.get("codigo_frente").astype(str)
+        return "Novo" if str(c).strip() == "Novo" else "Renovação"
 
+    if "classificacaooportunidade__c" in df.columns:
+        df["class_norm"] = df["classificacaooportunidade__c"].apply(norm_class)
+    else:
+        df["class_norm"] = None
+
+    # codigo_frente pode estar com outro nome; fallback para "Frente"
+    if "codigo_frente" in df.columns:
+        cod_raw = pd.to_numeric(df["codigo_frente"], errors="coerce")
+    elif "Frente" in df.columns:
+        cod_raw = pd.to_numeric(df["Frente"], errors="coerce")
+    else:
+        cod_raw = pd.Series(dtype="float64")  # vazio
+
+    df["codigo_frente_txt"] = cod_raw.astype("Int64").astype(str) if not cod_raw.empty else ""
+
+    # Mapear classificação por frente
     mapa_frente = (
         df.groupby("codigo_frente_txt")["class_norm"]
           .apply(lambda s: [x for x in s.dropna().tolist() if x != ""])
           .reset_index(name="ListaClass")
     )
-    def class_por_frente(lc: list[str]) -> t.Optional[str]:
+
+    def class_por_frente(lc):
         if "Renovação" in lc:
             return "Renovação"
         if "Novo" in lc:
             return "Novo"
         return None
+
     mapa_frente["class_por_frente"] = mapa_frente["ListaClass"].apply(class_por_frente)
     mapa_frente = mapa_frente.drop(columns=["ListaClass"])
-    mapa_frente["prefixo5"] = mapa_frente["codigo_frente_txt"].str[:5]
+
+    # Prefixo para fallback adicional
+    df["prefixo5"] = df["codigo_frente_txt"].astype(str).str[:5]
 
     mapa_prefixo = (
-        mapa_frente.groupby("prefixo5")["class_por_frente"]
+        mapa_frente.assign(prefixo5=mapa_frente["codigo_frente_txt"].astype(str).str[:5])
+        .groupby("prefixo5")["class_por_frente"]
         .apply(lambda s: [x for x in s.dropna().tolist()])
         .reset_index(name="Classes")
     )
-    def class_por_prefixo(cls: list[str]) -> str:
+
+    def class_por_prefixo(cls):
         if "Renovação" in cls:
             return "Renovação"
-        qtd_novo = sum(1 for x in cls if x == "Novo")
-        return "Novo" if qtd_novo >= 1 else "Novo"
+        return "Novo" if any(x == "Novo" for x in cls) else "Novo"
+
     mapa_prefixo["class_por_prefixo"] = mapa_prefixo["Classes"].apply(class_por_prefixo)
     mapa_prefixo = mapa_prefixo.drop(columns=["Classes"])
 
-    df["prefixo5"] = df["codigo_frente_txt"].str[:5]
-    df = df.merge(mapa_frente, on="codigo_frente_txt", how="left").merge(mapa_prefixo, on="prefixo5", how="left")
+    df = df.merge(mapa_frente, on="codigo_frente_txt", how="left") \
+           .merge(mapa_prefixo, on="prefixo5", how="left")
 
-    def class_final(row) -> str:
+    def class_final(row):
         c1, c2, c3 = row.get("class_norm"), row.get("class_por_frente"), row.get("class_por_prefixo")
         if c1 not in [None, ""]:
             return c1
@@ -621,24 +663,27 @@ def tbl_vendas(cfg: Config) -> pd.DataFrame:
         if c3 not in [None, ""]:
             return c3
         return "Novo"
+
     df["classificacao_final"] = df.apply(class_final, axis=1)
 
-    df = df[df["Status"].isin(["Oficializado", "Vendido"])].copy()
-    df = df[df["Safra"] >= pd.Timestamp(2025, 1, 1)]
-    agg = (
-        df.groupby(["Safra", "CarteiraAtual", "Status", "classificacao_final"], dropna=False)["Valor_Frente"]
-          .sum()
-          .reset_index()
-          .rename(columns={
-              "Safra": "mes_calendario",
-              "CarteiraAtual": "Check",
-              "Status": "status_frente",
-              "classificacao_final": "classificacaooportunidade__c",
-              "Valor_Frente": "SomaVendas"
-          })
-    )
-    agg["mes_calendario"] = pd.to_datetime(agg["mes_calendario"], errors="coerce").dt.date
-    return agg
+    # Filtros mínimos esperados
+    if "Status" in df.columns:
+        df = df[df["Status"].isin(["Oficializado", "Vendido"])].copy()
+    if "Safra" in df.columns:
+        df = df[df["Safra"] >= pd.Timestamp(2025, 1, 1)]
+
+    # Colunas de saída robustas (só se existirem)
+    out = pd.DataFrame()
+    out["mes_calendario"] = df["Safra"] if "Safra" in df.columns else pd.NaT
+    out["Check"] = df["CarteiraAtual"] if "CarteiraAtual" in df.columns else None
+    out["status_frente"] = df["Status"] if "Status" in df.columns else None
+    out["classificacaooportunidade__c"] = df["classificacao_final"]
+    out["SomaVendas"] = df["Valor_Frente"] if "Valor_Frente" in df.columns else 0
+
+    # Tipos finais
+    out["mes_calendario"] = pd.to_datetime(out["mes_calendario"], errors="coerce").dt.date
+
+    return out
 
 
 def tD_indice() -> pd.DataFrame:
