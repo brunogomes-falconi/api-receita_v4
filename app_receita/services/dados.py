@@ -9,18 +9,26 @@ import traceback
 # se você escolheu outro nome de arquivo, troque "basecode" abaixo
 from basecode import Config, run_pipeline  # type: ignore
 
+# --- nomes oficiais de UI que você definiu ---
+CARTEIRAS_UI_OFICIAIS = [
+    "Agronegócio",
+    "América do Norte",
+    "Bens Não Duráveis",
+    "Infraestrutura e Indústria de Base",
+    "MID",
+    "Saúde Educação Segurança e Adm.Pública",
+    "Servicos e Tecnologia",
+]
+
 # --- mapeamentos de carteira para lidar com normalizações internas (se houver) ---
 # Ex.: se internamente algo vier como "Falconi EUA", exibimos como "América do Norte".
 DEPARA_EXIBICAO = {
     "Falconi EUA": "América do Norte",
-    # adicione aqui qualquer outro "de->para" que precise refletir na UI
+    # adicione outros casos reais se houver
 }
 
 # Quando receber da UI "América do Norte", podemos ter de mapear para o valor interno do dado:
-DEPARA_INTERNO = {
-    "América do Norte": "Falconi EUA",
-    # adicione complementares se necessário
-}
+DEPARA_INTERNO = {v: k for k, v in DEPARA_EXIBICAO.items()}
 
 def _ajustar_carteira_para_interno(valor_ui: str) -> str:
     return DEPARA_INTERNO.get(valor_ui, valor_ui)
@@ -35,26 +43,54 @@ def carregar_pipeline(cfg: Config) -> Dict[str, "pd.DataFrame"]:
     """
     return run_pipeline(cfg)
 
-def listar_carteiras(cfg: Config) -> List[str]:
+# --- nomes oficiais de UI que você definiu ---
+CARTEIRAS_UI_OFICIAIS = [
+    "Agronegócio",
+    "América do Norte",
+    "Bens Não Duráveis",
+    "Infraestrutura e Indústria de Base",
+    "MID",
+    "Saúde Educação Segurança e Adm.Pública",
+    "Servicos e Tecnologia",
+]
+
+# de/para entre base e UI
+DEPARA_EXIBICAO = {
+    "Falconi EUA": "América do Norte",
+    # adicione outros casos reais se houver
+}
+DEPARA_INTERNO = {v: k for k, v in DEPARA_EXIBICAO.items()}
+
+def _ajustar_carteira_para_interno(valor_ui: str) -> str:
+    return DEPARA_INTERNO.get(valor_ui, valor_ui)
+
+def _ajustar_carteira_para_ui(valor_dado: str) -> str:
+    return DEPARA_EXIBICAO.get(valor_dado, valor_dado)
+
+def listar_carteiras_ui(cfg: "Config") -> list[str]:
     """
-    Lista carteiras distintas a partir de dados disponíveis no pipeline.
-    Tentamos em ordem: 'Carteira' (tD_carteira), 'Check' em frames principais, etc.
+    Lê carteiras do pipeline, aplica de/para para UI e
+    GARANTE presença dos nomes oficiais definidos por você.
     """
-    dfs = carregar_pipeline(cfg)
-    candidatos = []
+    try:
+        dfs = carregar_pipeline(cfg)
+    except Exception:
+        dfs = {}
 
-    # 1) Fonte 'Carteira' se existir
-    if "Carteira" in dfs and not dfs["Carteira"].empty and "Carteira" in dfs["Carteira"].columns:
-        candidatos.extend(dfs["Carteira"]["Carteira"].dropna().astype(str).tolist())
+    candidatos = set()
+    for key in ["Carteira", "Receita_PoC", "Receita_Produto", "Receita_SuccessFee", "Vendas", "tF_Vendas_long"]:
+        df = dfs.get(key)
+        if df is not None and not df.empty:
+            col = "Carteira" if "Carteira" in df.columns else ("Check" if "Check" in df.columns else None)
+            if col:
+                for v in df[col].dropna().astype(str):
+                    candidatos.add(_ajustar_carteira_para_ui(v))
 
-    # 2) Coluna 'Check' em conjuntos relevantes
-    for key in ["Receita_PoC", "Receita_Produto", "Receita_SuccessFee", "Vendas", "tF_Vendas_long"]:
-        if key in dfs and not dfs[key].empty and "Check" in dfs[key].columns:
-            candidatos.extend(dfs[key]["Check"].dropna().astype(str).tolist())
-
-    # normaliza exibição
-    unicos_ui = sorted({_ajustar_carteira_para_ui(x) for x in candidatos if x and x.strip()})
-    return unicos_ui
+    # mistura com a lista oficial e ordena
+    combinada = set(CARTEIRAS_UI_OFICIAIS) | candidatos
+    # devolve em ordem: oficiais primeiro, depois extras em alfabética
+    extras = sorted([x for x in combinada if x not in CARTEIRAS_UI_OFICIAIS])
+    return CARTEIRAS_UI_OFICIAIS + extras
 
 def _aplicar_filtros_basicos(df, mes: str, status: str, carteira: str):
     """
@@ -164,3 +200,106 @@ def calcular_cascata(cfg: Config, mes: str, status: str, carteira: str) -> List[
         {"label": "GAP Meta", "valor": round(gap_meta, 2)},
         {"label": "Total", "valor": round(total, 2)},
     ]
+
+def _filtrar_ano_2025(df):
+    import pandas as pd
+    if df is None or df.empty:
+        return df
+    if "mes_calendario" not in df.columns:
+        return df
+    s = pd.to_datetime(df["mes_calendario"], errors="coerce")
+    return df[(s.dt.year == 2025)]
+
+def _pivot_mensal_2025(df, valor_col: str):
+    """
+    Espera colunas: Check (carteira), nome_cliente, codigo_frente, mes_calendario, <valor_col>
+    Gera pivot com colunas Jan..Dez/2025 + Total por linha e Total por coluna.
+    """
+    import pandas as pd
+    if df is None or df.empty:
+        # cria pivot vazio com meses 2025
+        cols = [pd.Timestamp(2025, m, 1).strftime("%b/2025") for m in range(1, 13)] + ["Total"]
+        return pd.DataFrame(columns=["Carteira","Cliente","Frente"] + cols)
+
+    df = df.copy()
+    df["mes_cal"] = pd.to_datetime(df["mes_calendario"], errors="coerce")
+    df["ym"] = df["mes_cal"].dt.to_period("M")
+    df["mes_label"] = df["mes_cal"].dt.strftime("%b/2025")  # ex.: Jan/2025
+
+    # normaliza campos de ID
+    df["Carteira"] = df.get("Check", "")
+    df["Cliente"]  = df.get("nome_cliente", "")
+    df["Frente"]   = df.get("codigo_frente", "")
+
+    # só meses de 2025
+    df = df[df["mes_cal"].dt.year == 2025]
+
+    # agrega por linha de ID + mês
+    grp = df.groupby(["Carteira","Cliente","Frente","mes_label"], dropna=False)[valor_col].sum().reset_index()
+
+    # pivot
+    pivot = grp.pivot_table(index=["Carteira","Cliente","Frente"], columns="mes_label", values=valor_col, aggfunc="sum").fillna(0.0)
+
+    # garante ordem dos meses
+    meses = [pd.Timestamp(2025, m, 1).strftime("%b/2025") for m in range(1, 13)]
+    for ml in meses:
+        if ml not in pivot.columns:
+            pivot[ml] = 0.0
+    pivot = pivot[meses]
+
+    # total por linha
+    pivot["Total"] = pivot.sum(axis=1)
+
+    # reordena index como colunas
+    pivot = pivot.reset_index()
+
+    return pivot
+
+def tabela_poc(cfg: "Config", mes: str, status: str, carteira: str):
+    """
+    Tabela de Receita PoC (linhas: Carteira/Cliente/Frente, colunas: meses 2025).
+    """
+    import pandas as pd
+    try:
+        dfs = carregar_pipeline(cfg)
+        df = dfs.get("Receita_PoC")
+        if df is None:
+            return pd.DataFrame()
+        df = _aplicar_filtros_basicos(df, mes, status, carteira)
+        df = _filtrar_ano_2025(df)
+        return _pivot_mensal_2025(df, "ReceitaPoC")  # valor
+    except Exception:
+        import traceback; traceback.print_exc()
+        return pd.DataFrame()
+
+def tabela_success_fee(cfg: "Config", mes: str, status: str, carteira: str):
+    import pandas as pd
+    try:
+        dfs = carregar_pipeline(cfg)
+        df = dfs.get("Receita_SuccessFee")
+        if df is None:
+            return pd.DataFrame()
+        df = _aplicar_filtros_basicos(df, mes, status, carteira)
+        df = _filtrar_ano_2025(df)
+        return _pivot_mensal_2025(df, "SuccessFee")
+    except Exception:
+        import traceback; traceback.print_exc()
+        return pd.DataFrame()
+
+def tabela_produtos(cfg: "Config", mes: str, status: str, carteira: str):
+    import pandas as pd
+    try:
+        dfs = carregar_pipeline(cfg)
+        # juntar Razão (histórico) + Carteira (futuro) como no run_pipeline
+        df = dfs.get("Receita_Produto")
+        car = dfs.get("Carteira_Produto")
+        import pandas as pd
+        base = pd.concat([df, car], ignore_index=True, sort=False) if df is not None or car is not None else pd.DataFrame()
+        if base is None or base.empty:
+            return pd.DataFrame()
+        base = _aplicar_filtros_basicos(base, mes, status, carteira)
+        base = _filtrar_ano_2025(base)
+        return _pivot_mensal_2025(base, "ReceitaProduto")
+    except Exception:
+        import traceback; traceback.print_exc()
+        return pd.DataFrame()

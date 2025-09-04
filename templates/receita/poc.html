@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load df_tags %}
 {% block title %}PoC · Falconi{% endblock %}
 {% block content %}
   {% include "partials/receita_tabs.html" %}
@@ -7,4 +8,34 @@
     <h2 class="h5 mb-3">Receita PoC — 2025</h2>
     <p class="text-muted">Tabela por carteiras, cliente e frente (colunas = meses de 2025). Exportação Excel virá nesta aba.</p>
   </div>
+  <div class="d-flex justify-content-end mb-2">
+  <a class="btn btn-primary" href="{% url 'app_receita:exportar_excel' 'poc' %}?mes={{ filtros.mes }}&status={{ filtros.status }}&carteira={{ filtros.carteira }}">Exportar Excel</a>
+</div>
+
+<div class="card p-3">
+  {% if table is not None and table.shape.0 > 0 %}
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead>
+          <tr>
+            {% for col in table.columns %}
+              <th>{{ col }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for _, row in table.iterrows %}
+            <tr>
+              {% for col in table.columns %}
+                <td>{{ row|get_item:col }}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-muted mb-0">Nenhum dado disponível para os filtros selecionados.</p>
+  {% endif %}
+</div>
 {% endblock %}
