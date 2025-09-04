@@ -26,14 +26,32 @@ EMAIL_TYPE_CHOICES = [
 ]
 
 class UserProfile(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default="USER")
-    email_frequency = models.CharField(max_length=10, choices=EMAIL_FREQ_CHOICES, default="none")
-    email_report_type = models.CharField(max_length=10, choices=EMAIL_TYPE_CHOICES, default="exec")
-    send_time_brt = models.TimeField(default=timezone.datetime.strptime("08:00", "%H:%M").time)
+    ROLE_CHOICES = [
+        ("FUNC", "Funcionário"),
+        ("VP", "VP"),
+        ("DIR", "Diretor"),
+    ]
+    EMAIL_SUMMARY_TYPE_CHOICES = [
+        ("poc", "Resumo PoC"),
+        ("sf", "Resumo Success Fee"),
+        ("prod", "Resumo Produtos"),
+        ("geral", "Resumo Geral"),
+        ("off", "Não enviar"),
+    ]
+    EMAIL_FREQ_CHOICES = [
+        ("daily", "Diário"),
+        ("weekly", "Semanal"),
+        ("monthly", "Mensal"),
+    ]
 
-    def __str__(self):
-        return f"Perfil({self.user.username})"
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    role = models.CharField(max_length=8, choices=ROLE_CHOICES, default="FUNC")
+
+    # Estes são os campos que o form usa:
+    email_summary_type = models.CharField(max_length=16, choices=EMAIL_SUMMARY_TYPE_CHOICES, default="geral")
+    email_frequency = models.CharField(max_length=16, choices=EMAIL_FREQ_CHOICES, default="daily")
+    from datetime import time
+    email_send_time = models.TimeField(default=time(hour=8, minute=0))
 
 class ViewingPermission(models.Model):
     """

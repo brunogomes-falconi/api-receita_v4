@@ -1,36 +1,58 @@
+from __future__ import annotations
+
 from django import forms
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from .models import UserProfile, ViewingPermission
 
-# Mesma lista oficial de carteiras que usamos na UI
-CARTEIRAS_UI_OFICIAIS = [
-    "Agronegócio",
-    "América do Norte",
-    "Bens Não Duráveis",
-    "Infraestrutura e Indústria de Base",
-    "MID",
-    "Saúde Educação Segurança e Adm.Pública",
-    "Servicos e Tecnologia",
-]
+User = get_user_model()
+
 
 class ProfileForm(forms.ModelForm):
+    """
+    Edição de preferências de e-mail e horário.
+    Usamos fields='__all__' + exclude para evitar FieldError em import-time,
+    caso os campos novos ainda não tenham sido migrados.
+    """
     class Meta:
         model = UserProfile
-        fields = ["email_frequency", "email_report_type", "send_time_brt"]
-        widgets = {
-            "send_time_brt": forms.TimeInput(format="%H:%M", attrs={"type": "time"}),
-        }
+        fields = "__all__"
+        exclude = ["user", "role"]  # usuário não edita estes dois
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Aplica widget de hora se o campo existir
+        if "email_send_time" in self.fields:
+            self.fields["email_send_time"].widget = forms.TimeInput(
+                format="%H:%M",
+                attrs={"type": "time"}
+            )
+
 
 class PermissionGrantForm(forms.Form):
-    user = forms.ModelChoiceField(
+    """
+    VP/Diretor: conceder visualização de uma carteira a outro usuário.
+    'carteiras_choices' são injetadas no __init__ (lista oficial).
+    """
+    grantee = forms.ModelChoiceField(
         queryset=User.objects.all().order_by("username"),
-        label="Conceder para o usuário",
+        label="Usuário",
+        help_text="Usuário que receberá permissão de visualização.",
     )
-    portfolio = forms.ChoiceField(
-        choices=[(c, c) for c in CARTEIRAS_UI_OFICIAIS],
+    carteira = forms.ChoiceField(
+        choices=[],
         label="Carteira",
+        help_text="Carteira a ser concedida.",
     )
 
+    def __init__(self, *args, **kwargs):
+        carteiras_choices = kwargs.pop("carteiras_choices", [])
+        super().__init__(*args, **kwargs)
+        self.fields["carteira"].choices = [(c, c) for c in carteiras_choices]
+
+
 class PermissionRevokeForm(forms.Form):
-    """Form simples para revogar por ID."""
-    perm_id = forms.IntegerField(widget=forms.HiddenInput())
+    """
+    Formulário simples para revogar uma ou mais permissões concedidas.
+    O template renderiza uma checkbox por permissão e envia os IDs selecionados.
+    """
+    revoke_ids = forms.CharField(widget=forms.HiddenInput, required=False)
