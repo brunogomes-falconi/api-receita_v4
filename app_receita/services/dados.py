@@ -303,3 +303,104 @@ def tabela_produtos(cfg: "Config", mes: str, status: str, carteira: str):
     except Exception:
         import traceback; traceback.print_exc()
         return pd.DataFrame()
+
+
+def tabela_pendente_formacao(cfg: "Config", mes: str, status: str, carteira: str):
+    """
+    Tabela de Receita Pendente por Formação de Equipe.
+    Entrada esperada: dfs["Pendente_Alocacao_HD"] ou qualquer fonte que já traga a coluna
+    "ReceitaPendenteAlocMes" (caso contrário, retorna pivot vazio com a mesma estrutura de meses/Total).
+    """
+    import pandas as pd
+    VALOR_COL = "ReceitaPendenteAlocMes"
+    try:
+        dfs = carregar_pipeline(cfg)
+
+        # Procura uma fonte que já tenha a coluna "ReceitaPendenteAlocMes" pronta
+        candidatos = ["Pendente_Alocacao_HD", "tF_Vendas_long", "Vendas"]
+        src = None
+        for k in candidatos:
+            d = dfs.get(k)
+            if d is not None and (VALOR_COL in d.columns):
+                src = d
+                break
+
+        if src is None or src.empty:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        src = _aplicar_filtros_basicos(src, mes, status, carteira)
+        src = _filtrar_ano_2025(src)
+
+        if VALOR_COL not in src.columns:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        return _pivot_mensal_2025(src, VALOR_COL)
+    except Exception:
+        traceback.print_exc()
+        return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+def tabela_pendente_assinatura(cfg: "Config", mes: str, status: str, carteira: str):
+    """
+    Tabela de Receita Pendente de Assinatura.
+    Entrada esperada: uma fonte que já contenha a coluna "ReceitaPendenteAssinatura"
+    (ex.: dfs["Pendente_Assinatura"] ou consolidado explodido). Fallback: pivot vazio.
+    """
+    import pandas as pd
+    VALOR_COL = "ReceitaPendenteAssinatura"
+    try:
+        dfs = carregar_pipeline(cfg)
+
+        candidatos = ["Pendente_Assinatura", "tF_Vendas_long", "Vendas"]
+        src = None
+        for k in candidatos:
+            d = dfs.get(k)
+            if d is not None and (VALOR_COL in d.columns):
+                src = d
+                break
+
+        if src is None or src.empty:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        src = _aplicar_filtros_basicos(src, mes, status, carteira)
+        src = _filtrar_ano_2025(src)
+
+        if VALOR_COL not in src.columns:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        return _pivot_mensal_2025(src, VALOR_COL)
+    except Exception:
+        traceback.print_exc()
+        return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+def tabela_receita_potencial(cfg: "Config", mes: str, status: str, carteira: str):
+    """
+    Tabela de Receita Potencial (PoC).
+    Entrada esperada: uma fonte com a coluna "ReceitaPotencialPocMes" (ex.: dfs["tF_Vendas_long"]
+    explodido ou dfs["Receita_Potencial"], se existir). Fallback: pivot vazio.
+    """
+    import pandas as pd
+    VALOR_COL = "ReceitaPotencialPocMes"
+    try:
+        dfs = carregar_pipeline(cfg)
+
+        candidatos = ["Receita_Potencial", "tF_Vendas_long", "Vendas"]
+        src = None
+        for k in candidatos:
+            d = dfs.get(k)
+            if d is not None and (VALOR_COL in d.columns):
+                src = d
+                break
+
+        if src is None or src.empty:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        src = _aplicar_filtros_basicos(src, mes, status, carteira)
+        src = _filtrar_ano_2025(src)
+
+        if VALOR_COL not in src.columns:
+            return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)
+
+        return _pivot_mensal_2025(src, VALOR_COL)
+    except Exception:
+        traceback.print_exc()
+        return _pivot_mensal_2025(pd.DataFrame(), VALOR_COL)

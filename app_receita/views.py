@@ -1,89 +1,21 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-from datetime import date
 import pandas as pd
+from io import BytesIO
+
 from app_receita.services.dados import (
-    Config, calcular_cascata, listar_carteiras_ui,
-    tabela_poc, tabela_success_fee, tabela_produtos
+    Config,
+    calcular_cascata,
+    listar_carteiras_ui,
+    tabela_poc,
+    tabela_success_fee,
+    tabela_produtos,
+    tabela_pendente_formacao,
+    tabela_pendente_assinatura,
+    tabela_receita_potencial,
 )
 
-# Página inicial (resumo)
-def resumo(request):
-    return render(request, "home.html")
-
-# Abas principais
-def receita(request):
-    return render(request, "receita/receita.html")
-
-def poc(request):
-    ctx = _contexto_comum(request, "PoC · Falconi")
-    cfg = Config(use_access=False)  # mude para True quando tiver o driver
-    filtros = ctx["filtros"]
-    df = tabela_poc(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-    ctx["table"] = df  # usaremos no template
-    return render(request, "receita/poc.html", ctx)
-
-def success_fee(request):
-    ctx = _contexto_comum(request, "Success Fee · Falconi")
-    cfg = Config(use_access=False)
-    filtros = ctx["filtros"]
-    df = tabela_success_fee(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-    ctx["table"] = df
-    return render(request, "receita/success_fee.html", ctx)
-
-def produtos(request):
-    ctx = _contexto_comum(request, "Produtos · Falconi")
-    cfg = Config(use_access=False)
-    filtros = ctx["filtros"]
-    df = tabela_produtos(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-    ctx["table"] = df
-    return render(request, "receita/produtos.html", ctx)
-
-def pendente_formacao(request):
-    return render(request, "receita/pendente_formacao.html")
-
-def pendente_assinatura(request):
-    return render(request, "receita/pendente_assinatura.html")
-
-def receita_potencial(request):
-    return render(request, "receita/receita_potencial.html")
-
-def exportar_excel(request, tipo: str):
-    """
-    tipo: 'poc' | 'success_fee' | 'produtos'
-    Usa os filtros atuais da querystring.
-    """
-    filtros = _get_filtros(request)
-    cfg = Config(use_access=False)
-    if tipo == "poc":
-        df = tabela_poc(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-        fname = "poc_2025.xlsx"
-    elif tipo == "success_fee":
-        df = tabela_success_fee(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-        fname = "success_fee_2025.xlsx"
-    elif tipo == "produtos":
-        df = tabela_produtos(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-        fname = "produtos_2025.xlsx"
-    else:
-        df = pd.DataFrame()
-        fname = "export.xlsx"
-
-    # resposta Excel simples (dados crus)
-    from io import BytesIO
-    bio = BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        (df if df is not None else pd.DataFrame()).to_excel(writer, index=False, sheet_name="dados")
-    bio.seek(0)
-
-    resp = HttpResponse(
-        bio.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    resp["Content-Disposition"] = f'attachment; filename="{fname}"'
-    return resp
-
 # ---------- Helpers de filtros ----------
-
 MESES_2025 = [
     {"value": "2025-01", "label": "Jan/2025"},
     {"value": "2025-02", "label": "Fev/2025"},
@@ -105,17 +37,6 @@ STATUS_OPCOES = [
     {"value": "Renovação", "label": "Renovação"},
 ]
 
-# OBS: por enquanto, carteiras de exemplo; vamos trocar para vir dos dados (distinct)
-CARTEIRAS_FIXAS = [
-    {"value": "todas", "label": "Selecionar Todos"},
-    {"value": "Agronegócio", "label": "Agronegócio"},
-    {"value": "América do Norte", "label": "América do Norte"},
-    {"value": "Bens Não Duráveis", "label": "Bens Não Duráveis"},
-    {"value": "Infraestrutura e Indústria de Base", "label": "Infraestrutura e Indústria de Base"},
-    {"value": "MID", "label": "MID"},
-    {"value": "Saúde Educação Segurança e Adm.Pública", "label": "Saúde Educação Segurança e Adm.Pública"},
-    {"value": "Servicos e Tecnologia", "label": "Servicos e Tecnologia"},
-]
 
 def _get_filtros(request):
     """
@@ -133,35 +54,28 @@ def _get_filtros(request):
         mes = "tudo"
     if status not in [s["value"] for s in STATUS_OPCOES]:
         status = "todos"
-    if carteira not in [c["value"] for c in CARTEIRAS_FIXAS]:
+    if not carteira:
         carteira = "todas"
 
-    return {
-        "mes": mes,
-        "status": status,
-        "carteira": carteira,
-    }
+    return {"mes": mes, "status": status, "carteira": carteira}
+
 
 def _contexto_comum(request, titulo_pagina):
     filtros = _get_filtros(request)
 
-    # Config local (se estiver sem Access por enquanto, mantenha use_access=False)
     cfg = Config(
-        # preencha caminhos reais quando quiser usar as fontes
-        # access_db_razao=..., access_db_resultado=..., etc.
-        use_access=False,  # troque para True quando tiver o driver do Access ok
-        # bigquery_project_id="SEU-PROJETO-GCP",
+        use_access=False,  # troque para True quando o driver do Access estiver ok
     )
 
     try:
         carteiras_ui = listar_carteiras_ui(cfg)
     except Exception:
         carteiras_ui = [
-            "Agronegócio","América do Norte","Bens Não Duráveis","Infraestrutura e Indústria de Base",
-            "MID","Saúde Educação Segurança e Adm.Pública","Servicos e Tecnologia"
+            "Agronegócio", "América do Norte", "Bens Não Duráveis",
+            "Infraestrutura e Indústria de Base", "MID",
+            "Saúde Educação Segurança e Adm.Pública", "Servicos e Tecnologia",
         ]
 
-    # monta a lista para o select (com “Selecionar Todos”)
     carteiras_options = [{"value": "todas", "label": "Selecionar Todos"}] + [
         {"value": c, "label": c} for c in carteiras_ui
     ]
@@ -174,33 +88,22 @@ def _contexto_comum(request, titulo_pagina):
         "CARTEIRAS": carteiras_options,
     }
 
-# ---------- Views ----------
 
+# ---------- Views ----------
 def resumo(request):
     ctx = _contexto_comum(request, "Início · Falconi")
     return render(request, "home.html", ctx)
 
+
 def receita(request):
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
-
-    # Monte a Config com seus caminhos reais (ajuste depois; por ora podemos testar com o que já tiver local)
-    cfg = Config(
-        # Preencha aqui os caminhos reais se quiser evitar o default do módulo:
-        access_db_razao=r"C:\Work\Base\Base_Razao.accdb",
-        access_db_caixa=r"C:\Work\Base\Base_Caixa.accdb",
-        access_db_resultado=r"C:\Work\Base\BD_Resultado.accdb",
-        access_db_roda_razao=r"C:\Work\Base\Roda_Base_Razao.accdb",
-        # csv_meta_receita=... etc
-        # bigquery_project_id="SEU-PROJETO-GCP",
-    )
-
+    cfg = Config(use_access=False)
     filtros = ctx["filtros"]
     try:
-        ctx["waterfall_data"] = calcular_cascata(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
-    except Exception as e:
-        # Se der qualquer problema de conector, mantém placeholder e mostra um aviso básico no console
-        print("[receita] Erro ao calcular cascata:", e)
-        import traceback; traceback.print_exc()
+        ctx["waterfall_data"] = calcular_cascata(
+            cfg, filtros["mes"], filtros["status"], filtros["carteira"]
+        )
+    except Exception:
         ctx["waterfall_data"] = [
             {"label": "Receita PoC", "valor": 0},
             {"label": "Receita Success Fee", "valor": 0},
@@ -211,5 +114,92 @@ def receita(request):
             {"label": "GAP Meta", "valor": 0},
             {"label": "Total", "valor": 0},
         ]
-
     return render(request, "receita/receita.html", ctx)
+
+
+def poc(request):
+    ctx = _contexto_comum(request, "PoC · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_poc(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/poc.html", ctx)
+
+
+def success_fee(request):
+    ctx = _contexto_comum(request, "Success Fee · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_success_fee(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/success_fee.html", ctx)
+
+
+def produtos(request):
+    ctx = _contexto_comum(request, "Produtos · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_produtos(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/produtos.html", ctx)
+
+
+# NOVAS ABAS
+def pendente_formacao(request):
+    ctx = _contexto_comum(request, "Pendente Formação · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_pendente_formacao(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/pendente_formacao.html", ctx)
+
+
+def pendente_assinatura(request):
+    ctx = _contexto_comum(request, "Pendente Assinatura · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/pendente_assinatura.html", ctx)
+
+
+def receita_potencial(request):
+    ctx = _contexto_comum(request, "Receita Potencial · Falconi")
+    cfg = Config(use_access=False)
+    f = ctx["filtros"]
+    ctx["table"] = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
+    return render(request, "receita/receita_potencial.html", ctx)
+
+
+# EXPORTAÇÃO GENÉRICA
+def exportar_excel(request, tipo: str):
+    """
+    tipo suportado:
+      - 'poc' | 'success_fee' | 'produtos'
+      - 'pend_formacao' | 'pend_assinatura' | 'potencial'
+    Gera um .xlsx com uma aba "dados" contendo o DataFrame cru (após filtros).
+    """
+    f = _get_filtros(request)
+    cfg = Config(use_access=False)
+
+    if tipo == "poc":
+        df = tabela_poc(cfg, f["mes"], f["status"], f["carteira"]); fname = "poc_2025.xlsx"
+    elif tipo == "success_fee":
+        df = tabela_success_fee(cfg, f["mes"], f["status"], f["carteira"]); fname = "success_fee_2025.xlsx"
+    elif tipo == "produtos":
+        df = tabela_produtos(cfg, f["mes"], f["status"], f["carteira"]); fname = "produtos_2025.xlsx"
+    elif tipo == "pend_formacao":
+        df = tabela_pendente_formacao(cfg, f["mes"], f["status"], f["carteira"]); fname = "pendente_formacao_2025.xlsx"
+    elif tipo == "pend_assinatura":
+        df = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"]); fname = "pendente_assinatura_2025.xlsx"
+    elif tipo == "potencial":
+        df = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"]); fname = "receita_potencial_2025.xlsx"
+    else:
+        df = pd.DataFrame(); fname = "export.xlsx"
+
+    bio = BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        (df if df is not None else pd.DataFrame()).to_excel(writer, index=False, sheet_name="dados")
+    bio.seek(0)
+
+    resp = HttpResponse(
+        bio.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+    return resp

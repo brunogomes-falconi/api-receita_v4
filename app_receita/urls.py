@@ -13,6 +13,6 @@ urlpatterns = [
     path("pendente-assinatura/", views.pendente_assinatura, name="pendente_assinatura"),
     path("receita-potencial/", views.receita_potencial, name="receita_potencial"),
 
-    # exportações
+    # exportações (inclui novos tipos pend_formacao, pend_assinatura e potencial)
     path("exportar/<str:tipo>/", views.exportar_excel, name="exportar_excel"),
 ]
