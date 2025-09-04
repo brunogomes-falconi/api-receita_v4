@@ -63,9 +63,8 @@ def _get_filtros(request):
 def _contexto_comum(request, titulo_pagina):
     filtros = _get_filtros(request)
 
-    cfg = Config(
-        use_access=False,  # troque para True quando o driver do Access estiver ok
-    )
+    # A Config de basecode.py não aceita 'use_access'; instancie sem argumentos.
+    cfg = Config()
 
     try:
         carteiras_ui = listar_carteiras_ui(cfg)
@@ -96,14 +95,40 @@ def resumo(request):
 
 
 def receita(request):
+    """
+    Página do gráfico em cascata (Receita 2025).
+    Agora usa dados reais do pipeline via calcular_cascata(...).
+    Mantém fallback seguro em caso de erro de conector/coluna.
+    """
     ctx = _contexto_comum(request, "Receita (Cascata) · Falconi")
-    cfg = Config(use_access=False)
+
+    # Ajuste aqui conforme seu ambiente:
+    # - Enquanto não tiver o driver do Access (ACE + pyodbc) instalado, deixe use_access=False.
+    # - Quando instalar e apontar os caminhos, troque para use_access=True.
+    # - Se quiser, já preencha caminhos específicos do seu basecode.py (comentados abaixo).
+    cfg = Config(
+        # Exemplo de preenchimento quando quiser usar caminhos explícitos:
+        # access_db_resultado=r"C:\caminho\para\BD_Resultado.accdb",
+        # access_db_razao=r"C:\caminho\para\Base_Razao.accdb",
+        # access_db_caixa=r"C:\caminho\para\Base_Caixa.accdb",
+        # access_db_roda_razao=r"C:\caminho\para\Roda_Base_Razao.accdb",
+        # xlsx_depara_un=r"C:\caminho\para\DePara_UN.xlsx",
+        # csv_meta_receita=r"C:\caminho\para\meta_receita.csv",
+        # bigquery_project_id="seu-projeto-gcp",
+        use_access=False,  # <<< troque para True quando o driver do Access estiver OK
+    )
+
     filtros = ctx["filtros"]
     try:
-        ctx["waterfall_data"] = calcular_cascata(
-            cfg, filtros["mes"], filtros["status"], filtros["carteira"]
-        )
-    except Exception:
+        dados = calcular_cascata(cfg, filtros["mes"], filtros["status"], filtros["carteira"])
+        # sanity-check básico: precisa ser lista de dicts com label/valor
+        if not isinstance(dados, list) or not all(isinstance(x, dict) for x in dados):
+            raise ValueError("Formato inesperado retornado por calcular_cascata.")
+        ctx["waterfall_data"] = dados
+    except Exception as e:
+        # Loga o erro e mantém o placeholder seguro
+        print("[receita] Erro ao calcular cascata:", e)
+        import traceback; traceback.print_exc()
         ctx["waterfall_data"] = [
             {"label": "Receita PoC", "valor": 0},
             {"label": "Receita Success Fee", "valor": 0},
@@ -114,12 +139,13 @@ def receita(request):
             {"label": "GAP Meta", "valor": 0},
             {"label": "Total", "valor": 0},
         ]
+
     return render(request, "receita/receita.html", ctx)
 
 
 def poc(request):
     ctx = _contexto_comum(request, "PoC · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_poc(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/poc.html", ctx)
@@ -127,7 +153,7 @@ def poc(request):
 
 def success_fee(request):
     ctx = _contexto_comum(request, "Success Fee · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_success_fee(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/success_fee.html", ctx)
@@ -135,7 +161,7 @@ def success_fee(request):
 
 def produtos(request):
     ctx = _contexto_comum(request, "Produtos · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_produtos(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/produtos.html", ctx)
@@ -144,7 +170,7 @@ def produtos(request):
 # NOVAS ABAS
 def pendente_formacao(request):
     ctx = _contexto_comum(request, "Pendente Formação · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_pendente_formacao(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/pendente_formacao.html", ctx)
@@ -152,7 +178,7 @@ def pendente_formacao(request):
 
 def pendente_assinatura(request):
     ctx = _contexto_comum(request, "Pendente Assinatura · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_pendente_assinatura(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/pendente_assinatura.html", ctx)
@@ -160,7 +186,7 @@ def pendente_assinatura(request):
 
 def receita_potencial(request):
     ctx = _contexto_comum(request, "Receita Potencial · Falconi")
-    cfg = Config(use_access=False)
+    cfg = Config()
     f = ctx["filtros"]
     ctx["table"] = tabela_receita_potencial(cfg, f["mes"], f["status"], f["carteira"]) or pd.DataFrame()
     return render(request, "receita/receita_potencial.html", ctx)
@@ -169,13 +195,13 @@ def receita_potencial(request):
 # EXPORTAÇÃO GENÉRICA
 def exportar_excel(request, tipo: str):
     """
-    tipo suportado:
+    tipos suportados:
       - 'poc' | 'success_fee' | 'produtos'
       - 'pend_formacao' | 'pend_assinatura' | 'potencial'
     Gera um .xlsx com uma aba "dados" contendo o DataFrame cru (após filtros).
     """
     f = _get_filtros(request)
-    cfg = Config(use_access=False)
+    cfg = Config()
 
     if tipo == "poc":
         df = tabela_poc(cfg, f["mes"], f["status"], f["carteira"]); fname = "poc_2025.xlsx"
